@@ -1,0 +1,42 @@
+{
+  "case_id": "fixture-conflicts-1",
+  "title": "Fixture: sprzeczności",
+  "summary": "Syntetyczna sprawa z konfliktem mocy.",
+  "evidence_cards": [],
+  "conflicting_facts": [
+    {
+      "fact_key": "device_power",
+      "values": [
+        "8 kW",
+        "10 kW"
+      ],
+      "summary": "Rozbieżność mocy urządzenia (fixture)"
+    }
+  ],
+  "completeness_gaps": [],
+  "graph_hints": [],
+  "service_signals": [],
+  "marketing_signals": [],
+  "action_proposals": [],
+  "proposed_next_actions": [],
+  "execution_results": [],
+  "context_pack_version": "vNext-2026-04",
+  "has_blocking_conflicts": false,
+  "has_blocking_gaps": false,
+  "badges": {
+    "gaps": 0,
+    "conflicts": 1,
+    "evidence": 0,
+    "proposals": 0,
+    "service_signals": 0,
+    "marketing_signals": 0
+  },
+  "top_conflicts": [
+    {
+      "summary": "Rozbieżność mocy urządzenia (fixture, skrót)",
+      "severity": "warning",
+      "type": "fact_conflict"
+    }
+  ],
+  "top_gaps": []
+}

@@ -1,0 +1,22 @@
+{
+  "schema_name": "daszek_operational_feed_snapshot",
+  "schema_version": "1",
+  "snapshot_id": "op-feed-fixture-empty",
+  "created_at": "2026-05-01T12:00:00Z",
+  "generated_at": "2026-05-01T12:00:00Z",
+  "title": "Operational feed (pusty)",
+  "subtitle": "Fixture testowy — brak pozycji.",
+  "read_only": true,
+  "creates_cases": false,
+  "executes_actions": false,
+  "gate_claim": false,
+  "feed": {
+    "desk": [],
+    "day": {
+      "sections": []
+    },
+    "cases": [],
+    "tasks": [],
+    "case_details": {}
+  }
+}

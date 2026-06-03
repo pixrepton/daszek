@@ -1,0 +1,21 @@
+{
+  "case_id": "fixture-gaps-1",
+  "title": "Fixture: braki danych",
+  "summary": "Syntetyczna sprawa z lukami.",
+  "evidence_cards": [],
+  "conflicting_facts": [],
+  "completeness_gaps": [
+    "Brak podpisanego protokołu (fixture)",
+    {
+      "summary": "Brak faktury (fixture)",
+      "severity": "warning",
+      "status": "open"
+    }
+  ],
+  "graph_hints": [],
+  "service_signals": [],
+  "marketing_signals": [],
+  "action_proposals": [],
+  "proposed_next_actions": [],
+  "execution_results": []
+}

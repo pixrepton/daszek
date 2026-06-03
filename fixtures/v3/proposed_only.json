@@ -1,0 +1,26 @@
+{
+  "case_id": "fixture-proposed-only-1",
+  "title": "Fixture: tylko proposed_next_actions",
+  "summary": "Kontrola UI, gdy w projekcji jest wyłącznie proposed_next_actions (brak klucza action_proposals).",
+  "evidence_cards": [],
+  "conflicting_facts": [],
+  "completeness_gaps": [],
+  "graph_hints": [],
+  "service_signals": [],
+  "marketing_signals": [],
+  "proposed_next_actions": [
+    {
+      "proposal_id": "ap-prop-only-1",
+      "action_type": "request_site_photo",
+      "status": "proposed",
+      "title": "Poproś o zdjęcie z montażu",
+      "recommended_operator_action": "Wyślij klientowi prośbę o jedno zdjęcie z miejsca montażu.",
+      "reason": "Ułatwi weryfikację zgodności z ofertą.",
+      "evidence_refs": [],
+      "risk_level": "low",
+      "requires_approval": false,
+      "policy_status": "allowed_for_projection"
+    }
+  ],
+  "execution_results": []
+}

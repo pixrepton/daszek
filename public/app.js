@@ -1,0 +1,4694 @@
+const V1_API_BASE = '/wp-json/daszek/v1';
+const V2_API_BASE = '/wp-json/daszek/v2';
+const V3_API_BASE = '/wp-json/daszek/v3';
+
+const THEME_STORAGE_KEY = 'daszek-theme';
+
+function applyDaszekTheme(mode) {
+    const m = mode === 'dark' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', m);
+    try {
+        localStorage.setItem(THEME_STORAGE_KEY, m);
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function initDaszekTheme() {
+    try {
+        const stored = localStorage.getItem(THEME_STORAGE_KEY);
+        if (stored === 'dark' || stored === 'light') {
+            applyDaszekTheme(stored);
+        }
+    } catch (e) {
+        /* ignore */
+    }
+    const btn = document.getElementById('theme-toggle');
+    if (btn) {
+        btn.addEventListener('click', () => {
+            const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+            applyDaszekTheme(cur === 'dark' ? 'light' : 'dark');
+        });
+    }
+}
+
+const state = {
+    currentUser: null,
+    csrfToken: null,
+    currentView: 'desk',
+    search: '',
+    detail: null,
+    data: {
+        desk: { items: [], counts: {} },
+        cockpit: { substrate: {}, cohort_runs: [] },
+        day: { sections: [] },
+        cases: { items: [] },
+        quality: { summary: {} },
+        tasks: [],
+        lastIngress: { ok: false, snapshot: null, message: '' },
+        operationalFeed: { ok: false, snapshot: null, message: '', loadError: null },
+        cohortList: { ok: false, items: [], loadError: null },
+        caseArchive: { ok: false, items: [], ids: [], loadError: null },
+    },
+    skrzat: {
+        answers: {},
+        loadingCaseId: '',
+        errors: {},
+    },
+};
+
+function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : null;
+}
+
+state.csrfToken = getCsrfToken();
+
+function buildApiUrl(base, endpoint, method = 'GET') {
+    const url = new URL(`${base}${endpoint}`, window.location.origin);
+    if ((method || 'GET').toUpperCase() === 'GET') {
+        url.searchParams.set('_rt', Date.now().toString());
+    }
+    return url.toString();
+}
+
+async function apiFetch(base, endpoint, options = {}) {
+    const method = (options.method || 'GET').toUpperCase();
+    const headers = {
+        'Content-Type': 'application/json',
+        ...options.headers,
+    };
+
+    if (method === 'GET') {
+        headers['Cache-Control'] = 'no-cache';
+        headers.Pragma = 'no-cache';
+    }
+
+    if (state.csrfToken && method !== 'GET') {
+        headers['X-CSRF-Token'] = state.csrfToken;
+    }
+
+    const response = await fetch(buildApiUrl(base, endpoint, method), {
+        ...options,
+        method,
+        headers,
+        credentials: 'same-origin',
+        cache: method === 'GET' ? 'no-store' : options.cache,
+    });
+
+    const rawBody = await response.text();
+    let parsedBody = null;
+    if (rawBody) {
+        try {
+            parsedBody = JSON.parse(rawBody);
+        } catch (parseError) {
+            parsedBody = null;
+        }
+    }
+
+    if (!response.ok) {
+        const message = parsedBody && typeof parsedBody === 'object'
+            ? parsedBody.message || parsedBody.code || 'Błąd API'
+            : rawBody || 'Błąd API';
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
+    }
+
+    return parsedBody !== null ? parsedBody : rawBody;
+}
+
+function showLoginScreen() {
+    document.getElementById('login-screen').style.display = 'grid';
+    document.getElementById('main-screen').style.display = 'none';
+}
+
+function showMainScreen() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('main-screen').style.display = 'block';
+    document.getElementById('current-user').textContent = state.currentUser || 'operator';
+}
+
+function showError(message) {
+    const box = document.getElementById('global-error');
+    box.textContent = message;
+    box.style.display = 'block';
+}
+
+function clearError() {
+    const box = document.getElementById('global-error');
+    box.textContent = '';
+    box.style.display = 'none';
+}
+
+function showToast(message) {
+    const host = document.getElementById('toast-host');
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    host.appendChild(toast);
+    setTimeout(() => toast.classList.add('toast-visible'), 10);
+    setTimeout(() => {
+        toast.classList.remove('toast-visible');
+        setTimeout(() => toast.remove(), 250);
+    }, 2600);
+}
+
+function nodeBApiBase() {
+    const raw = window.DASZEK_NODE_B_API_BASE || window.daszekNodeBApiBase || V3_API_BASE;
+    return String(raw || '').replace(/\/+$/, '');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text ?? '';
+    return div.innerHTML;
+}
+
+function formatDate(value) {
+    if (!value) {
+        return 'Brak terminu';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return escapeHtml(value);
+    }
+    return date.toLocaleString('pl-PL', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+}
+
+function humanizeCode(value, fallback = '') {
+    const text = String(value || '').trim();
+    if (!text) {
+        return fallback;
+    }
+    const normalized = text.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function priorityLabel(priority) {
+    return {
+        critical: 'krytyczny',
+        high: 'wysoki',
+        medium: 'średni',
+        low: 'niski',
+    }[priority] || humanizeCode(priority, 'średni');
+}
+
+function priorityTone(priority) {
+    return {
+        critical: 'high',
+        high: 'high',
+        medium: 'medium',
+        low: 'low',
+    }[priority] || 'medium';
+}
+
+function firstNonEmpty(...values) {
+    for (const value of values) {
+        const text = String(value || '').trim();
+        if (text) {
+            return text;
+        }
+    }
+    return '';
+}
+
+function hasOperationalFeedSnapshot() {
+    const snap = state.data.operationalFeed && state.data.operationalFeed.snapshot;
+    return !!(snap && snap.feed && typeof snap.feed === 'object');
+}
+
+function getOperationalFeed() {
+    return hasOperationalFeedSnapshot() ? state.data.operationalFeed.snapshot.feed : null;
+}
+
+const KNOWN_OPERATIONAL_FEED_SCHEMA_VERSIONS = new Set(['1', '1.0']);
+
+function operationalFeedSnapshotMetaLine() {
+    if (!hasOperationalFeedSnapshot()) {
+        return '';
+    }
+    const s = state.data.operationalFeed.snapshot;
+    const parts = [];
+    const id = String(s.snapshot_id || '').trim();
+    if (id) {
+        parts.push(`Migawka: ${escapeHtml(id)}`);
+    }
+    const ing = firstNonEmpty(s.ingested_at, s.generated_at);
+    if (ing) {
+        parts.push(`Zapis: ${escapeHtml(String(ing))}`);
+    }
+    const env = firstNonEmpty(s.environment);
+    if (env) {
+        parts.push(`Środowisko: ${escapeHtml(env)}`);
+    }
+    const run = firstNonEmpty(s.source_run_id);
+    if (run) {
+        parts.push(`run: ${escapeHtml(run)}`);
+    }
+    const sha = String(s.build_git_sha || '').trim();
+    if (sha) {
+        parts.push(`build: <code class="ds-meta-code">${escapeHtml(sha.slice(0, 12))}</code>`);
+    }
+    const sv = String(s.schema_version || '').trim();
+    if (sv) {
+        if (!KNOWN_OPERATIONAL_FEED_SCHEMA_VERSIONS.has(sv)) {
+            parts.push(`<span class="ds-schema-warn">schema ${escapeHtml(sv)} — nieznana wersja, odczyt best-effort</span>`);
+        } else {
+            parts.push(`schema ${escapeHtml(sv)}`);
+        }
+    }
+    return parts.length ? parts.join(' · ') : '';
+}
+
+function wrapDaszekViewShell(viewTrailLabels, innerHtml, metaLineHtml = '') {
+    const trail = ['Daszek', ...viewTrailLabels];
+    const crumbHtml = trail.map((label, i) => {
+        const isLast = i === trail.length - 1;
+        const cls = isLast ? 'ds-crumb ds-crumb-current' : 'ds-crumb';
+        const currentAttr = isLast ? ' aria-current="page"' : '';
+        const sep = isLast ? '' : '<span class="ds-crumb-sep" aria-hidden="true"> / </span>';
+        return `<span class="${cls}"${currentAttr}>${escapeHtml(label)}</span>${sep}`;
+    }).join('');
+    const metaBlock = metaLineHtml
+        ? `<p class="ds-meta-line detail-muted">${metaLineHtml}</p>`
+        : '';
+    return `
+        <div class="ds-view-shell">
+            <nav class="ds-breadcrumb" aria-label="Ścieżka widoku">${crumbHtml}</nav>
+            ${metaBlock}
+            ${innerHtml}
+        </div>`;
+}
+
+function wrapOperationalViewShell(viewTitle, innerHtml) {
+    const footer = hasOperationalFeedSnapshot() ? buildOperationalViewTechFooter() : '';
+    return wrapDaszekViewShell([viewTitle], innerHtml + footer, '');
+}
+
+function lastIngressSnapshotMetaLine(snap) {
+    if (!snap || typeof snap !== 'object') {
+        return '';
+    }
+    const parts = [];
+    const runId = String(snap.run_id || '').trim();
+    if (runId) {
+        parts.push(`run_id ${escapeHtml(runId)}`);
+    }
+    const ts = firstNonEmpty(snap.ingested_at, snap.created_at);
+    if (ts) {
+        parts.push(`snapshot ${escapeHtml(String(ts))}`);
+    }
+    return parts.length ? parts.join(' · ') : '';
+}
+
+function projectionBoundaryHtml() {
+    return '<p class="detail-muted projection-boundary">Widok jest projekcją. Nie tworzy spraw i nie wykonuje akcji.</p>';
+}
+
+function projectionSectionMissingPreview() {
+    return 'Brak w tej projekcji (read-only)';
+}
+
+const PRIMARY_VIEW_TABS = ['desk', 'cases', 'day', 'archive', 'tasks'];
+const MORE_VIEW_TABS = ['cockpit', 'quality', 'last_ingress', 'cohort_runs'];
+
+function isGatebTestArtifact(item) {
+    if (!item || typeof item !== 'object') {
+        return false;
+    }
+    const title = String(item.title || item.title_pl || '').toUpperCase();
+    const nid = String(item.note_id || item.desk_note_id || '').toLowerCase();
+    const cid = String(item.case_id || '').toLowerCase();
+    const mid = String(item.source_message_id || item.message_id || '').toLowerCase();
+    if (title.includes('BADBAD') || nid.includes('badbad')) {
+        return true;
+    }
+    return mid.startsWith('gateb_badbad') || mid.startsWith('gateb-');
+}
+
+function operationalFeedHumanTimestampLine() {
+    if (!hasOperationalFeedSnapshot()) {
+        return '';
+    }
+    const s = state.data.operationalFeed.snapshot;
+    const ing = firstNonEmpty(s.ingested_at, s.generated_at, s.created_at);
+    return ing ? `Ostatnia aktualizacja danych: ${formatDate(ing)}` : '';
+}
+
+function renderOperatorTechTier1(innerHtml) {
+    const body = String(innerHtml || '').trim();
+    if (!body) {
+        return '';
+    }
+    return `
+        <details class="ds-tech-tier-1 detail-tech">
+            <summary class="ds-tech-tier-summary"><span class="ds-tech-plus" aria-hidden="true">+</span> Szczegóły systemu</summary>
+            <div class="ds-tech-tier-body">${body}</div>
+        </details>`;
+}
+
+function renderOperatorTechTier2(innerHtml) {
+    const body = String(innerHtml || '').trim();
+    if (!body) {
+        return '';
+    }
+    return `
+        <details class="ds-tech-tier-2 detail-tech">
+            <summary class="ds-tech-tier-summary"><span class="ds-tech-plus" aria-hidden="true">+</span> Pełne dane techniczne</summary>
+            <div class="ds-tech-tier-body ds-tech-tier-body--scroll">${body}</div>
+        </details>`;
+}
+
+function buildOperationalViewTechFooter() {
+    const tier1 = `
+        <p class="detail-muted">Dane z systemu AI (podgląd). Ten ekran nie wysyła maili ani nie zamyka spraw automatycznie.</p>
+        ${operationalFeedHumanTimestampLine() ? `<p class="detail-muted">${escapeHtml(operationalFeedHumanTimestampLine())}</p>` : ''}`;
+    const tier2Parts = [];
+    const meta = operationalFeedSnapshotMetaLine();
+    if (meta) {
+        tier2Parts.push(`<p class="ds-meta-line detail-muted">${meta}</p>`);
+    }
+    tier2Parts.push(projectionBoundaryHtml());
+    return renderOperatorTechTier1(`${tier1}${renderOperatorTechTier2(tier2Parts.join(''))}`);
+}
+
+function operatorEssenceFor(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const candidates = [
+        row.operator_essence_pl,
+        row.summary_short,
+        row.why_on_desk,
+        row.why_now_pl,
+        row.summary,
+        row.operator_brief_pl,
+        row.latest_signal_summary_pl,
+    ];
+    for (const raw of candidates) {
+        const text = String(raw || '').replace(/\s+/g, ' ').trim();
+        if (text) {
+            return text;
+        }
+    }
+    return '';
+}
+
+function textsEqual(a, b) {
+    const left = String(a || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const right = String(b || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return Boolean(left && right && left === right);
+}
+
+function nextStepLineFor(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const step = firstNonEmpty(
+        row.primary_next_action_title_pl,
+        row.recommended_next_step,
+        row.recommended_next_step_pl,
+        row.next_step_hint_pl,
+        row.assistant_suggestion_pl,
+    );
+    if (step) {
+        return step;
+    }
+    return 'Do ustalenia z klientem lub wewnętrznie.';
+}
+
+function humanizeOperationalStatus(statusRaw) {
+    const s = String(statusRaw || '').trim().toUpperCase();
+    const map = {
+        WATCHING: 'Do obserwacji',
+        REVIEW: 'Wymaga przejrzenia',
+        CONFLICT: 'Sprzeczność danych',
+        WAIT: 'Czeka na odpowiedź',
+        CLOSED: 'Zamknięte',
+        DONE: 'Zakończone',
+    };
+    return map[s] || humanizeCode(statusRaw, '');
+}
+
+function recordActivityLabel(item) {
+    const ts = caseActivityTimestamp(item) || firstNonEmpty(item.updated_at, item.latest_signal_at, item.created_at);
+    return ts ? formatDate(ts) : '';
+}
+
+function renderOperatorHero(item, options = {}) {
+    const row = item && typeof item === 'object' ? item : {};
+    const title = firstNonEmpty(row.title, row.title_pl, 'Temat operacyjny');
+    const essence = operatorEssenceFor(row);
+    const next = nextStepLineFor(row);
+    const activity = recordActivityLabel(row);
+    const showTitle = options.hideTitle !== true;
+    const essenceBlock = essence && !textsEqual(essence, title)
+        ? `<p class="ds-hero-essence">${escapeHtml(limitText(essence, options.essenceMax || 320))}</p>`
+        : '';
+    return `
+        <div class="ds-operator-hero">
+            ${showTitle ? `<p class="ds-hero-title">${escapeHtml(title)}</p>` : ''}
+            ${essenceBlock}
+            <p class="ds-hero-next"><strong>Następny krok:</strong> ${escapeHtml(limitText(next, 200))}</p>
+            ${activity ? `<p class="ds-hero-meta">Aktywność: ${escapeHtml(activity)}</p>` : ''}
+        </div>`;
+}
+
+function resolveFeedbackNoteId(note) {
+    const row = note && typeof note === 'object' ? note : {};
+    const candidates = [
+        row.v2_desk_note_id,
+        row.desk_note_id,
+        row.note_id,
+    ];
+    for (const raw of candidates) {
+        const id = String(raw || '').trim();
+        if (id.startsWith('note_')) {
+            return id;
+        }
+    }
+    return '';
+}
+
+function canSendFeedback(note) {
+    const row = note && typeof note === 'object' ? note : {};
+    if (row.feedback_eligible === false) {
+        return false;
+    }
+    if (row.feedback_eligible === true) {
+        return true;
+    }
+    const noteId = resolveFeedbackNoteId(row);
+    const caseId = String(row.case_id || '').trim();
+    const sigIds = row.source_signal_ids;
+    const signalOk = Array.isArray(sigIds) && String(sigIds[0] || '').trim() !== '';
+    return Boolean(noteId && caseId && signalOk);
+}
+
+function renderNoteFeedbackBlock(note) {
+    const noteId = resolveFeedbackNoteId(note);
+    if (!canSendFeedback(note)) {
+        const synthetic = String(note.note_id || '').startsWith('desk-') || String(note.note_id || '').startsWith('day-');
+        if (synthetic && noteId) {
+            return `<p class="detail-muted">Aby ocenić sugestię, otwórz kartkę ponownie z magazynu (przycisk Odśwież), jeśli ingest zdążył zapisać rekord.</p>`;
+        }
+        return '<p class="detail-muted">Ocena sugestii wymaga powiązania kartki ze sprawą i sygnałem w magazynie.</p>';
+    }
+    return `
+        <section class="detail-section detail-section-actions">
+            <h3>Twoja ocena</h3>
+            <div class="feedback-grid feedback-grid--primary">
+                <button type="button" class="btn btn-ghost btn-small" data-note-action="trafne" data-note-id="${escapeHtml(noteId)}">Trafne</button>
+                <button type="button" class="btn btn-secondary btn-small" data-note-action="zla_sprawa" data-note-id="${escapeHtml(noteId)}">Zła sprawa</button>
+                <button type="button" class="btn btn-ghost btn-small" data-note-action="to_juz_nieaktualne" data-note-id="${escapeHtml(noteId)}">To już nieaktualne</button>
+                ${note.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-note-action="tylko_w_sprawie" data-note-id="${escapeHtml(noteId)}">Tylko w sprawie</button>` : ''}
+            </div>
+            <details class="detail-tech detail-collapsible">
+                <summary>Więcej ocen</summary>
+                <div class="detail-tech-body feedback-grid">
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_mocne" data-note-id="${escapeHtml(noteId)}">Za mocne</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_slabe" data-note-id="${escapeHtml(noteId)}">Za słabe</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="nie_pokazuj_takich" data-note-id="${escapeHtml(noteId)}">Nie pokazuj mi takich</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-merge="${escapeHtml(noteId)}">Połącz ze sprawą</button>
+                </div>
+            </details>
+        </section>`;
+}
+
+function buildDetailTechBundle({ feedBanner = '', decisionView = {}, caseItem = {}, payload = {}, signals = [], traces = [], skrzatCaseId = '' }) {
+    const tier1 = feedBanner ? `<div class="detail-tech-tier1-intro">${feedBanner}</div>` : '';
+    const tier2 = [];
+    tier2.push(projectionBoundaryHtml());
+    const dv = renderDecisionViewSection(decisionView || {});
+    if (dv) {
+        tier2.push(dv);
+    }
+    if (skrzatCaseId) {
+        tier2.push(renderSkrzatPanel(caseItem, payload));
+    }
+    tier2.push(renderVNextFeedBadgeStrip(caseItem));
+    tier2.push(renderCieploEngagementBlock(state.detail && state.detail.engagement));
+    const caseId = String(caseItem.case_id || '').trim();
+    if (caseId) {
+        tier2.push(`<p class="detail-muted">Identyfikator sprawy: <code>${escapeHtml(caseId)}</code></p>`);
+    }
+    tier2.push(`
+        <details class="detail-tech detail-collapsible">
+            <summary>Źródła i ślad decyzji (techniczne)</summary>
+            <div class="detail-tech-body">
+                <section class="detail-section">
+                    <h3>Źródła</h3>
+                    <ul class="detail-list">${renderSignalItems(signals || [])}</ul>
+                </section>
+                <section class="detail-section">
+                    <h3>Ślad decyzji</h3>
+                    <ul class="detail-list">${renderTraceItems(traces || [])}</ul>
+                </section>
+            </div>
+        </details>`);
+    return renderOperatorTechTier1(`${tier1}${renderOperatorTechTier2(tier2.join(''))}`);
+}
+
+function renderCollapsibleDetailBlockIfPresent(title, sectionSt, previewText, bodyHtml) {
+    if (sectionSt !== 'present') {
+        return '';
+    }
+    return renderCollapsibleDetailBlock(title, previewText, bodyHtml);
+}
+
+function renderAboutCaseSection(caseItem) {
+    const summary = String(caseItem.summary || '').trim();
+    const brief = String(caseItem.operator_brief_pl || '').trim();
+    const text = summary || brief;
+    if (!text) {
+        return '';
+    }
+    if (textsEqual(summary, brief)) {
+        return `
+            <section class="detail-section">
+                <h3>O czym jest sprawa</h3>
+                <p>${escapeHtml(text)}</p>
+            </section>`;
+    }
+    let html = '';
+    if (summary) {
+        html += `
+            <section class="detail-section">
+                <h3>O czym jest sprawa</h3>
+                <p>${escapeHtml(summary)}</p>
+            </section>`;
+    }
+    if (brief && !textsEqual(brief, summary)) {
+        html += `
+            <section class="detail-section detail-section-intelligence">
+                <h3>Uwagi dla operatora</h3>
+                <p>${escapeHtml(brief)}</p>
+            </section>`;
+    }
+    return html;
+}
+
+function renderDetailSectionIfContent(title, htmlBody) {
+    const body = String(htmlBody || '').trim();
+    if (!body || body.includes('Brak aktywnych') || body.includes('Brak wpisów') || body.includes('Brak powiązanych')) {
+        const plain = body.replace(/<[^>]+>/g, '').trim();
+        if (!plain || /^Brak\b/i.test(plain)) {
+            return '';
+        }
+    }
+    return `
+        <section class="detail-section detail-section-intelligence">
+            <h3>${escapeHtml(title)}</h3>
+            ${body}
+        </section>`;
+}
+
+function scheduleDetailPanelFocus() {
+    requestAnimationFrame(() => {
+        const panel = document.getElementById('detail-panel');
+        const el = panel && panel.querySelector('[data-detail-focus-root]');
+        if (el && typeof el.focus === 'function') {
+            el.focus({ preventScroll: true });
+        }
+    });
+}
+
+function setDetailPanelChromeOpen(open) {
+    document.body.classList.toggle('detail-panel--open', !!open);
+    const bd = document.getElementById('detail-panel-backdrop');
+    if (bd) {
+        bd.hidden = !open;
+        bd.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+}
+
+function limitText(value, max = 130) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= max) {
+        return text;
+    }
+    return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+function countArray(value) {
+    return Array.isArray(value) ? value.length : 0;
+}
+
+function conflictCountFor(item) {
+    return countArray(item?.operator_visible_conflicts) + countArray(item?.conflicting_facts);
+}
+
+function gapCountFor(item) {
+    return countArray(item?.completeness_gaps) + countArray(item?.missing_info) + countArray(item?.operator_checklist_pl);
+}
+
+function recordTypeLabel(item, fallback = 'Uwaga') {
+    return firstNonEmpty(
+        item.record_type_label,
+        item.presence_label,
+        item.family_label,
+        caseFamilyLabel(item.family || item.case_family),
+        fallback
+    );
+}
+
+function recordStatusLabel(item) {
+    return firstNonEmpty(
+        item.status_label,
+        item.current_state_label,
+        item.lifecycle_label_pl,
+        caseStateLabel(item.current_state),
+        daszekLifecycle(item.lifecycle_state),
+        'aktywny'
+    );
+}
+
+function recordDueText(item) {
+    const due = firstNonEmpty(item.due_at, item.latest_signal_at, item.updated_at);
+    if (!due) {
+        return '';
+    }
+    return formatDate(due);
+}
+
+function caseActivityTimestamp(item) {
+    return firstNonEmpty(item.latest_signal_at, item.updated_at, item.created_at, item.archived_at) || '';
+}
+
+function sortCasesChronologically(items) {
+    return [...items].sort((left, right) => {
+        const leftTs = caseActivityTimestamp(left);
+        const rightTs = caseActivityTimestamp(right);
+        if (leftTs === rightTs) {
+            return String(left.case_id || '').localeCompare(String(right.case_id || ''));
+        }
+        return rightTs.localeCompare(leftTs);
+    });
+}
+
+function getArchivedCaseIdSet() {
+    const arch = state.data.caseArchive || {};
+    const ids = Array.isArray(arch.ids) ? arch.ids : [];
+    return new Set(ids.map(id => String(id || '').trim()).filter(Boolean));
+}
+
+function isCaseArchived(caseId) {
+    return getArchivedCaseIdSet().has(String(caseId || '').trim());
+}
+
+function findCaseRecordById(caseId) {
+    const cid = String(caseId || '').trim();
+    if (!cid) {
+        return null;
+    }
+    if (hasOperationalFeedSnapshot()) {
+        const feed = getOperationalFeed();
+        const fromFeed = (feed.cases || []).find(row => String(row.case_id || '') === cid);
+        if (fromFeed) {
+            return fromFeed;
+        }
+        const deskRow = iterOperationalFeedDeskLikeItems(feed).find(row => String(row.case_id || '') === cid);
+        if (deskRow) {
+            return {
+                case_id: cid,
+                title: firstNonEmpty(deskRow.case_title, deskRow.title, cid),
+                summary: firstNonEmpty(deskRow.summary, deskRow.why_on_desk, ''),
+                updated_at: deskRow.updated_at,
+            };
+        }
+    }
+    const legacy = (state.data.cases.items || []).find(row => String(row.case_id || '') === cid);
+    return legacy || null;
+}
+
+function isFeedProjectionNoteId(noteId) {
+    const nid = String(noteId || '').trim();
+    if (!nid) {
+        return false;
+    }
+    return /^desk-/i.test(nid) || /^day-/i.test(nid);
+}
+
+function iterOperationalFeedDeskLikeItems(feed) {
+    if (!feed || typeof feed !== 'object') {
+        return [];
+    }
+    const out = [];
+    for (const item of feed.desk || []) {
+        if (item && typeof item === 'object') {
+            out.push(item);
+        }
+    }
+    const day = feed.day;
+    if (day && Array.isArray(day.sections)) {
+        for (const sec of day.sections) {
+            if (!sec || !Array.isArray(sec.items)) {
+                continue;
+            }
+            for (const item of sec.items) {
+                if (item && typeof item === 'object') {
+                    out.push(item);
+                }
+            }
+        }
+    }
+    return out;
+}
+
+function findOperationalFeedDeskNote(noteId) {
+    const nid = String(noteId || '').trim();
+    if (!nid || !hasOperationalFeedSnapshot()) {
+        return null;
+    }
+    const feed = getOperationalFeed();
+    return iterOperationalFeedDeskLikeItems(feed).find(row => String(row.note_id || '') === nid) || null;
+}
+
+function deskNotesForCaseFromFeed(caseId, feed) {
+    const cid = String(caseId || '').trim();
+    if (!cid) {
+        return [];
+    }
+    return iterOperationalFeedDeskLikeItems(feed).filter(row => String(row.case_id || '') === cid);
+}
+
+function buildCaseDetailPayloadFromFeedCase(caseRow, feed) {
+    const cid = String(caseRow.case_id || '').trim();
+    const embedded = feed && typeof feed.case_details === 'object' ? feed.case_details[cid] : null;
+    if (embedded && typeof embedded === 'object') {
+        return embedded;
+    }
+    return {
+        ok: true,
+        generated_at: new Date().toISOString(),
+        view: 'case_detail_feed_stub',
+        case: { ...caseRow },
+        desk_notes: deskNotesForCaseFromFeed(cid, feed).map(n => ({
+            note_id: n.note_id,
+            case_id: n.case_id,
+            title: n.title,
+            summary: n.summary,
+            why_on_desk: n.why_on_desk,
+            recommended_next_step: n.recommended_next_step,
+            presence_mode: n.presence_mode,
+            updated_at: n.updated_at,
+        })),
+        signals: [],
+        decision_traces: [],
+        last_change: {},
+        thread_memory: {},
+        operational_timeline: [],
+        action_proposals: Array.isArray(caseRow.action_proposals) ? caseRow.action_proposals : [],
+        execution_results: Array.isArray(caseRow.execution_results) ? caseRow.execution_results : [],
+        case_id: cid,
+        feed_read_only_stub: true,
+    };
+}
+
+function resolveOperationalFeedCaseDetail(caseId) {
+    const cid = String(caseId || '').trim();
+    if (!cid || !hasOperationalFeedSnapshot()) {
+        return null;
+    }
+    const feed = getOperationalFeed();
+    const embedded = feed && typeof feed.case_details === 'object' ? feed.case_details[cid] : null;
+    if (embedded && typeof embedded === 'object') {
+        return embedded;
+    }
+    const row = findCaseRecordById(cid);
+    if (row) {
+        return buildCaseDetailPayloadFromFeedCase(row, feed);
+    }
+    return null;
+}
+
+function buildNoteDetailPayloadFromFeedDeskItem(item) {
+    const feed = getOperationalFeed();
+    const cid = String(item.case_id || '').trim();
+    let casePayload = null;
+    if (cid) {
+        const resolved = resolveOperationalFeedCaseDetail(cid);
+        casePayload = resolved && resolved.case ? resolved.case : (findCaseRecordById(cid) || null);
+    }
+    return {
+        ok: true,
+        note: item,
+        case: casePayload,
+        why_you_see_it: item.why_on_desk || item.summary || '',
+        operational_timeline: [],
+        signals: [],
+        decision_traces: [],
+        last_change: {},
+        feed_projection: true,
+    };
+}
+
+async function refreshCaseArchiveIndex() {
+    try {
+        const payload = await apiFetch(V2_API_BASE, '/case-archive');
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        const ids = Array.isArray(payload.ids)
+            ? payload.ids
+            : items.map(row => String(row.case_id || '').trim()).filter(Boolean);
+        state.data.caseArchive = { ok: true, items, ids, loadError: null };
+    } catch (error) {
+        state.data.caseArchive = {
+            ok: false,
+            items: [],
+            ids: [],
+            loadError: error && error.message ? String(error.message) : 'Nie udało się pobrać archiwum.',
+        };
+    }
+}
+
+async function archiveCaseById(caseId, meta = {}) {
+    const cid = String(caseId || '').trim();
+    if (!cid) {
+        return;
+    }
+    const record = findCaseRecordById(cid) || {};
+    const title = firstNonEmpty(meta.title, record.title, record.case_key, cid);
+    const summary = firstNonEmpty(meta.summary, record.summary, record.operator_brief_pl, '');
+    const confirmed = window.confirm(`Przenieść sprawę „${title}” do archiwum?\n\nZniknie z listy aktywnych spraw. Możesz ją przywrócić w widoku Archiwum.`);
+    if (!confirmed) {
+        return;
+    }
+    try {
+        await apiFetch(V2_API_BASE, `/cases/${encodeURIComponent(cid)}/archive`, {
+            method: 'POST',
+            body: JSON.stringify({
+                title,
+                summary,
+                latest_signal_at: caseActivityTimestamp(record),
+            }),
+        });
+        showToast('Sprawa została zarchiwizowana.');
+        if (state.detail && state.detail.type === 'case') {
+            const openId = (state.detail.payload && state.detail.payload.case && state.detail.payload.case.case_id) || '';
+            if (openId === cid) {
+                state.detail = null;
+                renderDetailPanel();
+            }
+        }
+        await refreshCaseArchiveIndex();
+        renderCurrentView();
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+async function unarchiveCaseById(caseId) {
+    const cid = String(caseId || '').trim();
+    if (!cid) {
+        return;
+    }
+    try {
+        await apiFetch(V2_API_BASE, `/cases/${encodeURIComponent(cid)}/unarchive`, { method: 'POST' });
+        showToast('Sprawa została przywrócona z archiwum.');
+        await refreshCaseArchiveIndex();
+        renderCurrentView();
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+function noteBucket(item) {
+    const priority = String(item.priority || item.business_priority || '').toLowerCase();
+    const mode = String(item.presence_mode || '').toLowerCase();
+    const waiting = firstNonEmpty(item.waiting_for, item.waiting_for_label);
+    const operational = String(item.operational_status || '').toLowerCase();
+    const hasAttentionIssue = conflictCountFor(item) > 0 || gapCountFor(item) > 0 || item.review_required;
+
+    if (waiting || operational === 'waiting' || countArray(item.blockers) > 0 || item.maintenance_guard?.blocked) {
+        return 'waiting';
+    }
+    if (hasAttentionIssue || priority === 'critical' || priority === 'high' || ['alarm', 'strong', 'advisory'].includes(mode)) {
+        return 'decision';
+    }
+    return 'now';
+}
+
+function groupDeskItems(items) {
+    const groups = {
+        now: { key: 'now', title: 'Teraz', subtitle: 'Najkrótsza lista rzeczy do ruszenia od razu.', items: [] },
+        decision: { key: 'decision', title: 'Do decyzji', subtitle: 'Tematy niepewne albo wymagające człowieka.', items: [] },
+        waiting: { key: 'waiting', title: 'Oczekujące / zablokowane', subtitle: 'Aktywne sprawy, ale niekoniecznie do wykonania w tej chwili.', items: [] },
+    };
+
+    items.forEach(item => {
+        groups[noteBucket(item)].items.push(item);
+    });
+
+    if (!groups.now.items.length && groups.decision.items.length) {
+        groups.now.items = groups.decision.items.splice(0, Math.min(3, groups.decision.items.length));
+    }
+
+    return [groups.now, groups.decision, groups.waiting].filter(group => group.items.length);
+}
+
+function renderRecordBadges(item, { includeSource = true } = {}) {
+    const badges = [];
+    const priority = String(item.priority || item.business_priority || '').trim();
+    const due = recordDueText(item);
+    const conflicts = conflictCountFor(item);
+    const gaps = gapCountFor(item);
+
+    if (priority) {
+        badges.push(`<span class="record-badge record-badge-${escapeHtml(priorityTone(priority))}">${escapeHtml(priorityLabel(priority))}</span>`);
+    }
+    if (due) {
+        badges.push(`<span class="record-badge">${escapeHtml(due)}</span>`);
+    }
+    if (conflicts) {
+        badges.push(`<span class="record-badge record-badge-risk">Sprzeczności: ${escapeHtml(String(conflicts))}</span>`);
+    }
+    if (gaps) {
+        badges.push(`<span class="record-badge record-badge-gap">Braki: ${escapeHtml(String(gaps))}</span>`);
+    }
+    if (includeSource && item.latest_change_source_label) {
+        badges.push(`<span class="record-badge">${escapeHtml(item.latest_change_source_label)}</span>`);
+    }
+    return badges.length ? `<div class="record-badges">${badges.join('')}</div>` : '';
+}
+
+function renderOperationalNoteRecord(item, { showDone = true, compact = false } = {}) {
+    const title = firstNonEmpty(item.title, 'Kartka operacyjna');
+    const caseTitle = firstNonEmpty(item.case_title, item.case_id ? 'Powiązana sprawa' : 'Bez przypisanej sprawy');
+    const openNoteLabel = `Otwórz kartkę: ${limitText(title, 60)}`;
+    const openCaseLabel = `Otwórz sprawę: ${limitText(caseTitle, 60)}`;
+    const statusLabel = humanizeOperationalStatus(item.operational_status) || recordStatusLabel(item);
+    const activity = recordActivityLabel(item);
+    return `
+        <article class="operational-record">
+            <button type="button" class="record-main" data-open-note="${escapeHtml(item.note_id)}" aria-label="${escapeHtml(openNoteLabel)}" aria-controls="detail-panel">
+                <div class="record-top">
+                    <span class="record-type">${escapeHtml(recordTypeLabel(item, 'Uwaga'))}</span>
+                    <span class="record-status">${escapeHtml(statusLabel)}</span>
+                </div>
+                ${renderOperatorHero(item, { essenceMax: compact ? 120 : 200 })}
+                ${renderRecordBadges(item)}
+                <div class="record-footer">
+                    <span>${escapeHtml(caseTitle)}</span>
+                    ${activity ? `<span>Aktywność: ${escapeHtml(activity)}</span>` : ''}
+                </div>
+            </button>
+            <div class="record-actions">
+                ${item.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}">Otwórz sprawę</button>` : `<button type="button" class="btn btn-ghost btn-small" data-open-note="${escapeHtml(item.note_id)}" aria-label="${escapeHtml(openNoteLabel)}">Szczegóły</button>`}
+                ${showDone ? `<button type="button" class="btn btn-secondary btn-small" data-note-action="to_juz_nieaktualne" data-note-id="${escapeHtml(item.note_id)}">Zrobione</button>` : ''}
+            </div>
+        </article>
+    `;
+}
+
+function operationalStatusPillClass(statusRaw) {
+    const s = String(statusRaw || '').trim().toUpperCase();
+    if (s.includes('CONFLICT') || s === 'CONFLICT') {
+        return 'status-pill--conflict';
+    }
+    if (s.includes('WAIT') || s.includes('REVIEW')) {
+        return 'status-pill--review';
+    }
+    if (s.includes('CLOSE') || s.includes('DONE')) {
+        return 'status-pill--closed';
+    }
+    return 'status-pill--default';
+}
+
+function renderOperationalCaseRecord(item, options = {}) {
+    const title = firstNonEmpty(item.title, item.case_key, 'Sprawa operacyjna');
+    const summary = limitText(firstNonEmpty(item.summary_short, item.summary, item.operator_brief_pl), 125);
+    const next = limitText(firstNonEmpty(item.primary_next_action_title_pl, item.next_step_hint_pl), 110);
+    const area = firstNonEmpty(item.business_area_label, businessAreaLabel(item.business_area), item.family_label, caseFamilyLabel(item.family));
+    const taskCount = Number(item.open_task_count || item.active_note_count || 0);
+    const openNoteId = firstNonEmpty(item.open_desk_note_id, item.note_id);
+    const signalMail = limitText(firstNonEmpty(item.latest_signal_summary_pl), 96);
+    const openCaseLabel = `Otwórz sprawę: ${limitText(title, 60)}`;
+    const openNoteShort = openNoteId ? `Otwórz kartkę: ${limitText(openNoteId, 56)}` : '';
+    const statusLabel = firstNonEmpty(item.status_label, caseStatusLabel(item.status));
+    const opHuman = humanizeOperationalStatus(item.operational_status);
+    const opPill = opHuman ? `<span class="status-pill ${operationalStatusPillClass(item.operational_status)}">${escapeHtml(opHuman)}</span>` : '';
+    return `
+        <article class="operational-record operational-record-case">
+            <button type="button" class="record-main" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}" aria-controls="detail-panel">
+                <div class="record-top">
+                    <span class="record-type">${escapeHtml(area || 'Sprawa')}</span>
+                    <span class="record-status">${escapeHtml(statusLabel)}${opPill}</span>
+                </div>
+                ${renderOperatorHero(item, { essenceMax: 200 })}
+                ${renderRecordBadges(item, { includeSource: false })}
+                <div class="record-footer">
+                    <span>Otwarte kartki: ${escapeHtml(String(taskCount))}</span>
+                    ${caseActivityTimestamp(item) ? `<span>Aktywność: ${escapeHtml(formatDate(caseActivityTimestamp(item)))}</span>` : ''}
+                </div>
+            </button>
+            <div class="record-actions">
+                <button type="button" class="btn btn-ghost btn-small" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}">Otwórz</button>
+                ${openNoteId ? `<button type="button" class="btn btn-secondary btn-small" data-open-note="${escapeHtml(openNoteId)}" aria-label="${escapeHtml(openNoteShort)}">Otwórz kartkę</button>` : ''}
+                ${item.case_id && !options.archived ? `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(item.case_id)}">Archiwizuj</button>` : ''}
+                ${item.case_id && options.archived ? `<button type="button" class="btn btn-secondary btn-small" data-unarchive-case="${escapeHtml(item.case_id)}">Przywróć</button>` : ''}
+            </div>
+        </article>
+    `;
+}
+
+function renderOperationalSection(section, options = {}) {
+    const limit = options.limit || section.items.length;
+    const visible = section.items.slice(0, limit);
+    const hiddenCount = section.items.length - visible.length;
+    return `
+        <section class="ops-section ops-section-${escapeHtml(section.key || 'items')}">
+            <div class="section-header ops-section-header">
+                <div>
+                    <h3>${escapeHtml(section.title)}</h3>
+                    ${section.subtitle ? `<p>${escapeHtml(section.subtitle)}</p>` : ''}
+                </div>
+                <span>${escapeHtml(String(section.items.length))}</span>
+            </div>
+            <div class="operational-list">
+                ${visible.map(item => renderOperationalNoteRecord(item, options)).join('')}
+            </div>
+            ${hiddenCount > 0 ? `<p class="detail-muted ops-more">Jeszcze ${escapeHtml(String(hiddenCount))} tematów poza pierwszym ekranem.</p>` : ''}
+        </section>
+    `;
+}
+
+/** @returns {'missing'|'empty'|'present'} */
+function sectionState(obj, key) {
+    const o = obj && typeof obj === 'object' ? obj : {};
+    if (!Object.prototype.hasOwnProperty.call(o, key)) {
+        return 'missing';
+    }
+    const v = o[key];
+    if (v == null || v === '') {
+        return 'empty';
+    }
+    if (Array.isArray(v)) {
+        return v.length ? 'present' : 'empty';
+    }
+    if (typeof v === 'object') {
+        return Object.keys(v).length ? 'present' : 'empty';
+    }
+    return 'present';
+}
+
+function sectionStateMessage(state, missingText, emptyText) {
+    if (state === 'missing') {
+        return `<p class="detail-muted">${escapeHtml(missingText)}</p>`;
+    }
+    if (state === 'empty') {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return '';
+}
+
+function renderCollapsibleDetailBlock(title, previewText, bodyHtml, { open = false } = {}) {
+    const openAttr = open ? ' open' : '';
+    const prev = previewText ? escapeHtml(String(previewText)) : 'Szczegóły';
+    return `
+    <details class="detail-section-collapsible detail-section-intelligence"${openAttr}>
+        <summary>
+            <span class="detail-collapsible-title">${escapeHtml(title)}</span>
+            <span class="detail-collapsible-preview">${prev}</span>
+        </summary>
+        <div class="detail-collapsible-inner">${bodyHtml}</div>
+    </details>`;
+}
+
+function proposalKeysPresent(caseItem, payload) {
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    const p = payload && typeof payload === 'object' ? payload : {};
+    return ['action_proposals', 'proposed_next_actions'].some(
+        k => Object.prototype.hasOwnProperty.call(c, k) || Object.prototype.hasOwnProperty.call(p, k),
+    );
+}
+
+function proposalSectionState(caseItem, payload) {
+    if (!proposalKeysPresent(caseItem, payload)) {
+        return 'missing';
+    }
+    const merged = collectActionProposalsForUi(caseItem, payload);
+    return merged.length ? 'present' : 'empty';
+}
+
+function conflictsKeysPresent(caseItem) {
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    return Object.prototype.hasOwnProperty.call(c, 'conflicting_facts')
+        || Object.prototype.hasOwnProperty.call(c, 'operator_visible_conflicts');
+}
+
+function conflictsSectionState(caseItem) {
+    if (!conflictsKeysPresent(caseItem)) {
+        return 'missing';
+    }
+    const list = caseItem.operator_visible_conflicts || caseItem.conflicting_facts || [];
+    return Array.isArray(list) && list.length ? 'present' : 'empty';
+}
+
+function executionHistorySectionState(caseItem, payload) {
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const hasC = Object.prototype.hasOwnProperty.call(c, 'execution_results');
+    const hasP = Object.prototype.hasOwnProperty.call(p, 'execution_results');
+    if (!hasC && !hasP) {
+        return 'missing';
+    }
+    const list = (hasP ? p.execution_results : null) ?? (hasC ? c.execution_results : null) ?? [];
+    return Array.isArray(list) && list.length ? 'present' : 'empty';
+}
+
+function collectActionProposalsForUi(caseItem, payload) {
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const raw = [
+        ...(Array.isArray(p.action_proposals) ? p.action_proposals : []),
+        ...(Array.isArray(c.action_proposals) ? c.action_proposals : []),
+        ...(Array.isArray(p.proposed_next_actions) ? p.proposed_next_actions : []),
+        ...(Array.isArray(c.proposed_next_actions) ? c.proposed_next_actions : []),
+    ].filter(x => x && typeof x === 'object');
+    const seen = new Set();
+    const out = [];
+    raw.forEach((item, idx) => {
+        const k = proposalDedupeKey(item, idx);
+        if (seen.has(k)) {
+            return;
+        }
+        seen.add(k);
+        out.push(item);
+    });
+    return out;
+}
+
+function proposalDedupeKey(item, idx) {
+    const id = String((item || {}).proposal_id || '').trim();
+    if (id) {
+        return `p:${id}`;
+    }
+    const aid = String((item || {}).action_id || '').trim();
+    if (aid) {
+        return `a:${aid}`;
+    }
+    const oid = String((item || {}).id || '').trim();
+    if (oid) {
+        return `i:${oid}`;
+    }
+    return `f:${String((item || {}).action_type || '')}:${idx}`;
+}
+
+function renderTechnicalDetails(title, value) {
+    if (value == null || value === '') {
+        return '';
+    }
+    let str = '';
+    if (typeof value === 'string') {
+        str = value;
+    } else {
+        try {
+            str = JSON.stringify(value, null, 2);
+        } catch (e) {
+            str = String(value);
+        }
+    }
+    const esc = escapeHtml(str);
+    if (!esc.trim()) {
+        return '';
+    }
+    return `
+        <details class="detail-tech">
+            <summary class="detail-muted">${escapeHtml(title)}</summary>
+            <pre class="detail-pre">${esc}</pre>
+        </details>`;
+}
+
+function polishPolicyStatus(raw) {
+    const s = String(raw || '').trim();
+    const map = {
+        allowed_for_projection: 'Do pokazania operatorowi',
+        blocked: 'Zablokowane',
+        requires_approval: 'Wymaga akceptacji',
+    };
+    return map[s] || (s ? humanizeCode(s, s) : '');
+}
+
+function polishProposalStatus(raw) {
+    const s = String(raw || '').trim();
+    const map = {
+        proposed: 'Zaproponowane',
+        approved: 'Zatwierdzone',
+        rejected: 'Odrzucone',
+        executed: 'Wykonane',
+        expired: 'Wygasłe',
+        new: 'Nowe',
+        requires_approval: 'Wymaga akceptacji',
+    };
+    return map[s] || (s ? humanizeCode(s, s) : 'Nieznany');
+}
+
+function polishRiskLevel(raw) {
+    const s = String(raw || '').trim().toLowerCase();
+    const map = {
+        low: 'niskie',
+        medium: 'średnie',
+        high: 'wysokie',
+        unknown: 'nieokreślone',
+    };
+    return map[s] || (s ? humanizeCode(s, 'nieokreślone') : 'nieokreślone');
+}
+
+function polishGapSeverity(raw) {
+    const s = String(raw || '').trim().toLowerCase();
+    const map = {
+        info: 'informacja',
+        warning: 'ostrzeżenie',
+        blocking: 'blokujące',
+        high: 'wysokie',
+        medium: 'średnie',
+        low: 'niskie',
+    };
+    return map[s] || (s ? humanizeCode(s, s) : '');
+}
+
+function polishGapStatus(raw) {
+    const s = String(raw || '').trim().toLowerCase();
+    const map = {
+        open: 'otwarte',
+        closed: 'zamknięte',
+        waived: 'świadomie pominięte',
+        resolved: 'rozwiązane',
+        false_positive: 'fałszywy alarm',
+        needs_action: 'wymaga działania',
+    };
+    return map[s] || (s ? humanizeCode(s, s) : '');
+}
+
+function polishExecutionStatus(raw) {
+    const s = String(raw || '').trim().toLowerCase();
+    const map = {
+        completed: 'Zakończone',
+        failed: 'Niepowodzenie',
+        pending: 'Oczekuje',
+        skipped: 'Pominięte',
+    };
+    return map[s] || (s ? humanizeCode(s, s) : '');
+}
+
+function mailboxSourceTypeLabel(type) {
+    const t = String(type || '').trim().toLowerCase();
+    const map = {
+        ref: 'Odniesienie',
+        gmail_message: 'Wiadomość e-mail',
+        email_thread: 'Wątek e-mail',
+        drive_document: 'Dokument na dysku',
+        document: 'Dokument',
+        calendar_event: 'Wydarzenie w kalendarzu',
+        event: 'Zdarzenie',
+    };
+    return map[t] || humanizeCode(t, 'Źródło');
+}
+
+function formatEvidenceRefsSummary(refs) {
+    const list = Array.isArray(refs) ? refs : [];
+    if (!list.length) {
+        return '';
+    }
+    const bits = list.slice(0, 4).map(r => {
+        if (typeof r === 'string') {
+            return r;
+        }
+        if (r && typeof r === 'object') {
+            return r.label || r.source_ref || r.id || r.source_id || '';
+        }
+        return '';
+    }).filter(Boolean);
+    const tail = list.length > 4 ? ` (+${list.length - 4})` : '';
+    return bits.length ? `${bits.join(', ')}${tail}` : '';
+}
+
+function downstreamSignalCategoryLabel(sig) {
+    const st = String((sig || {}).subtype || '').trim().toLowerCase();
+    const map = {
+        warranty_service_state: 'Serwis / gwarancja',
+        media_evidence_presence: 'Marketing / materiały',
+        review_request: 'Opinia / rekomendacja',
+        retention: 'Retencja',
+    };
+    if (map[st]) {
+        return map[st];
+    }
+    const t = String((sig || {}).type || '').trim().toLowerCase();
+    if (t === 'service') {
+        return 'Serwis';
+    }
+    if (t === 'marketing') {
+        return 'Marketing';
+    }
+    return humanizeCode(st || t, 'Rekomendacja');
+}
+
+function calendarRiskLabelPl(code) {
+    const c = String(code || '').trim();
+    const map = {
+        no_calendar_action_needed: 'Brak wymaganego działania w kalendarzu',
+    };
+    return map[c] || humanizeCode(c, c || 'Nieokreślone');
+}
+
+function taskSourceLabel(source) {
+    return {
+        gmail_intake: 'Gmail Intake / zgodność',
+        manual: 'Ręczne',
+        auto: 'Automatyczne',
+        mail: 'Mail',
+    }[source] || humanizeCode(source, 'Nieznane');
+}
+
+function businessAreaLabel(area) {
+    return {
+        sales: 'Sprzedaż',
+        finance: 'Finanse',
+        procurement: 'Zakupy',
+        logistics: 'Logistyka',
+        operations: 'Operacje',
+        service: 'Serwis',
+        security: 'Bezpieczeństwo',
+        supplier_commercial: 'Relacje z dostawcami',
+        marketing_growth: 'Marketing',
+        compliance_legal: 'Prawo i zgodność',
+        internal_coordination: 'Koordynacja wewnętrzna',
+        general_admin: 'Administracja',
+    }[area] || humanizeCode(area, 'Operacje');
+}
+
+function caseFamilyLabel(family) {
+    return {
+        lead_opportunity: 'Szansa sprzedażowa',
+        finance_settlement: 'Rozliczenie finansowe',
+        procurement_delivery: 'Dostawa zakupowa',
+        supplier_commercial_review: 'Ustalenia z dostawcą',
+        platform_service_security: 'Incydent platformy lub bezpieczeństwa',
+        compliance_legal_review: 'Sprawa prawna lub zgodność',
+        marketing_performance_review: 'Wyniki marketingu',
+        internal_coordination: 'Koordynacja wewnętrzna',
+        unknown: 'Sprawa ogólna',
+    }[family] || humanizeCode(family, 'Sprawa ogólna');
+}
+
+function caseStatusLabel(status) {
+    return {
+        open: 'Otwarta',
+        closed: 'Zamknięta',
+        merged: 'Połączona',
+    }[status] || humanizeCode(status, 'Otwarta');
+}
+
+function caseStateLabel(stateValue) {
+    return {
+        none: 'Bez stanu',
+        new: 'Nowa',
+        active: 'Aktywna',
+        received: 'Odebrane',
+        delivered: 'Dostarczone',
+        delivery_at_risk: 'Dostawa zagrożona',
+        ordered: 'Zamówione',
+        delayed: 'Opóźnione',
+        waiting_for_reply: 'Czeka na odpowiedź',
+        resolved: 'Rozwiązana',
+    }[stateValue] || humanizeCode(stateValue, 'Bez stanu');
+}
+
+function renderGuidanceSection(entity, { compact = false } = {}) {
+    if (!entity || (!entity.operational_status && !entity.guidance_reason_summary_pl)) {
+        return '';
+    }
+    const badge = entity.operational_status_label || entity.operational_status || '';
+    const wait = entity.waiting_for && entity.waiting_for !== 'none'
+        ? `<span class="guidance-waiting">${escapeHtml(entity.waiting_for_label || entity.waiting_for)}</span>`
+        : '';
+    const stagn = entity.stagnation_flag
+        ? '<span class="guidance-stagnation" title="Zaleganie">stoi</span>'
+        : '';
+    const reason = entity.guidance_reason_summary_pl
+        ? `<p>${escapeHtml(entity.guidance_reason_summary_pl)}</p>`
+        : '';
+    const blocker = entity.blocker_summary_pl
+        ? `<p class="detail-muted"><strong>Blokada:</strong> ${escapeHtml(entity.blocker_summary_pl)}</p>`
+        : '';
+    const hint = entity.next_step_hint_pl
+        ? `<p class="detail-muted"><strong>Hint:</strong> ${escapeHtml(entity.next_step_hint_pl)}</p>`
+        : '';
+    if (compact) {
+        return `
+            <div class="guidance-compact">
+                ${badge ? `<span class="guidance-badge">${escapeHtml(badge)}</span>` : ''}
+                ${wait}
+                ${stagn}
+            </div>
+        `;
+    }
+    return `
+        <section class="detail-section detail-section-guidance">
+            <h3>Stan sprawy (guidance)</h3>
+            <div class="guidance-meta">
+                ${badge ? `<span class="guidance-badge">${escapeHtml(badge)}</span>` : ''}
+                ${wait}
+                ${stagn}
+            </div>
+            ${reason}
+            ${blocker}
+            ${hint}
+        </section>
+    `;
+}
+
+function riskTypeLabel(riskType) {
+    return {
+        lead_loss_risk: 'Ryzyko utraty leada',
+        operational_delay_risk: 'Ryzyko opóźnienia operacyjnego',
+        logistics_risk: 'Ryzyko logistyczne',
+        finance_risk: 'Ryzyko finansowe',
+        interpretation_risk: 'Ryzyko błędnej interpretacji',
+        aging_risk: 'Ryzyko zalegania',
+        customer_silence_risk: 'Ryzyko ciszy klienta',
+        supplier_dependency_risk: 'Ryzyko zależności od dostawcy',
+    }[riskType] || humanizeCode(riskType, 'Ryzyko');
+}
+
+function decisionTypeLabel(decisionType) {
+    return {
+        upsert_case: 'Aktualizacja sprawy',
+        create_note: 'Utworzenie kartki',
+        update: 'Aktualizacja kartki',
+        resolve: 'Oznaczenie jako załatwione',
+        suppress: 'Wyciszenie kartki',
+        merge: 'Scalenie',
+        compatibility_update: 'Aktualizacja z widoku Zadań',
+        trafne: 'Ocena: trafne',
+        za_mocne: 'Ocena: za mocne',
+        za_slabe: 'Ocena: za słabe',
+        tylko_w_sprawie: 'Tylko w sprawie',
+        nie_pokazuj_takich: 'Nie pokazuj takich',
+        polacz_ze_sprawa: 'Połącz ze sprawą',
+        to_juz_nieaktualne: 'Już nieaktualne',
+        zla_sprawa: 'Błędne powiązanie ze sprawą',
+    }[decisionType] || humanizeCode(decisionType, 'Zmiana');
+}
+
+function changeSourceTone(source) {
+    return {
+        intake: 'intake',
+        operator: 'operator',
+        maintenance: 'maintenance',
+    }[source] || 'neutral';
+}
+
+function renderMetaBadge(label, tone = 'neutral') {
+    const text = String(label || '').trim();
+    if (!text) {
+        return '';
+    }
+    return `<span class="meta-badge meta-badge-${escapeHtml(tone)}">${escapeHtml(text)}</span>`;
+}
+
+function renderMaintenanceGuard(guard) {
+    if (!guard || !guard.blocked) {
+        return '';
+    }
+    const blockedUntil = formatDate(guard.blocked_until);
+    const reason = guard.reason_pl || 'Świeży manual feedback blokuje maintenance przez 7 dni.';
+    const lastAction = guard.last_action_label
+        ? `<div class="detail-muted">Ostatnia akcja operatora: ${escapeHtml(guard.last_action_label)} • ${escapeHtml(blockedUntil)}</div>`
+        : `<div class="detail-muted">Maintenance zablokowany do ${escapeHtml(blockedUntil)}</div>`;
+    return `
+        <div class="guard-callout">
+            <strong>Manual feedback blokuje maintenance</strong>
+            <div>${escapeHtml(reason)}</div>
+            ${lastAction}
+        </div>
+    `;
+}
+
+function renderLastChangeSummary(change, guard = null) {
+    const sourceLabel = change?.source_label || 'Intake AI';
+    const decisionLabel = change?.decision_type_label || '';
+    const ruleLabel = change?.maintenance_rule_label_pl || '';
+    const reason = change?.reason_summary_pl || '';
+    const createdAt = change?.created_at ? formatDate(change.created_at) : '';
+    const badges = [
+        renderMetaBadge(`Źródło: ${sourceLabel}`, changeSourceTone(change?.source)),
+        decisionLabel ? renderMetaBadge(decisionLabel, changeSourceTone(change?.source)) : '',
+        ruleLabel ? renderMetaBadge(ruleLabel, 'maintenance') : '',
+    ].filter(Boolean).join('');
+
+    return `
+        ${badges ? `<div class="note-meta-badges">${badges}</div>` : ''}
+        <p>${escapeHtml(reason || 'Brak dodatkowego uzasadnienia ostatniej zmiany.')}</p>
+        ${createdAt ? `<p class="detail-muted">Ostatnia zmiana: ${escapeHtml(createdAt)}</p>` : ''}
+        ${renderMaintenanceGuard(guard)}
+    `;
+}
+
+function compatibilityTaskTitle(task) {
+    const title = String((task || {}).title || '').trim();
+    if (!title) {
+        return 'Zadanie';
+    }
+    return title
+        .replace(/^Task:\s*/i, 'Zadanie: ')
+        .replace(/^Case:\s*/i, 'Sprawa: ')
+        .replace(/^Review:\s*/i, 'Do przeglądu: ');
+}
+
+function compatibilityTaskSummary(task) {
+    const intake = (task || {}).intake || {};
+    if ((task || {}).source === 'gmail_intake' && intake.decision_action) {
+        const parts = ['Pozycja zgodności z Gmail Intake.'];
+        parts.push(`Obszar: ${businessAreaLabel(intake.business_area)}.`);
+        if ((task || {}).due_at) {
+            parts.push(`Termin: ${formatDate(task.due_at)}.`);
+        }
+        if (intake.review_required) {
+            parts.push('Wymaga ręcznej oceny.');
+        }
+        return parts.join(' ');
+    }
+    return String((task || {}).note || '').trim();
+}
+
+function matchesSearch(parts) {
+    if (!state.search.trim()) {
+        return true;
+    }
+    const query = state.search.trim().toLowerCase();
+    return parts.some(part => String(part || '').toLowerCase().includes(query));
+}
+
+async function login(loginName, password) {
+    try {
+        const data = await apiFetch(V1_API_BASE, '/login', {
+            method: 'POST',
+            body: JSON.stringify({ login: loginName, password }),
+        });
+
+        state.currentUser = data.user;
+        state.csrfToken = data.csrf_token;
+        showMainScreen();
+        await loadAllData();
+    } catch (error) {
+        const box = document.getElementById('login-error');
+        box.textContent = error.message;
+        box.style.display = 'block';
+    }
+}
+
+async function logout() {
+    try {
+        await apiFetch(V1_API_BASE, '/logout', { method: 'POST' });
+    } catch (error) {
+        console.error(error);
+    } finally {
+        state.currentUser = null;
+        state.csrfToken = getCsrfToken();
+        showLoginScreen();
+    }
+}
+
+function hasDaszekSessionCookie() {
+    const name = 'daszek_session=';
+    return document.cookie.split(';').some(part => part.trim().startsWith(name));
+}
+
+async function tryRestoreSession() {
+    if (!hasDaszekSessionCookie()) {
+        return false;
+    }
+    try {
+        const desk = await apiFetch(V2_API_BASE, '/desk');
+        if (desk && typeof desk === 'object' && desk.ok !== false) {
+            state.currentUser = state.currentUser || 'operator';
+            showMainScreen();
+            await loadAllData();
+            return true;
+        }
+    } catch (error) {
+        if (error && error.status === 401) {
+            showLoginScreen();
+            return false;
+        }
+    }
+    return false;
+}
+
+function bindClick(id, handler) {
+    const el = document.getElementById(id);
+    if (!el) {
+        console.warn(`Daszek UI: brak elementu #${id}`);
+        return;
+    }
+    el.addEventListener('click', handler);
+}
+
+function parseViewFromUrl() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const v = normalizeMainViewId(params.get('view'));
+        if (v) {
+            state.currentView = v;
+        }
+    } catch (err) {
+        console.warn('Daszek: parseViewFromUrl', err);
+    }
+}
+
+function syncViewToUrl(viewKey) {
+    const normalized = normalizeMainViewId(viewKey);
+    if (!normalized) {
+        return;
+    }
+    try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('view', normalized);
+        history.replaceState({}, '', url);
+    } catch (err) {
+        console.warn('Daszek: syncViewToUrl', err);
+    }
+}
+
+async function loadAllData() {
+    const viewRoot = document.getElementById('view-root');
+    if (viewRoot) {
+        viewRoot.setAttribute('aria-busy', 'true');
+    }
+    try {
+        clearError();
+        parseViewFromUrl();
+        setViewHeader('Ładuję zasilenie Daszka…', 'Pobieranie projekcji operational feed, biurka i ingressu (read-only).');
+
+        const requests = await Promise.allSettled([
+            apiFetch(V2_API_BASE, '/desk'),
+            apiFetch(V3_API_BASE, '/cockpit'),
+            apiFetch(V2_API_BASE, '/day'),
+            apiFetch(V2_API_BASE, '/cases'),
+            apiFetch(V2_API_BASE, '/ai-quality'),
+            apiFetch(V1_API_BASE, '/tasks'),
+            apiFetch(V3_API_BASE, '/operational-feed-snapshots/latest'),
+            apiFetch(V3_API_BASE, '/ingress-quality-snapshots/latest'),
+            apiFetch(V3_API_BASE, '/cohort-runs'),
+            apiFetch(V2_API_BASE, '/case-archive'),
+        ]);
+
+        const [deskResult, cockpitResult, dayResult, casesResult, qualityResult, tasksResult, operationalResult, lastIngressResult, cohortListResult, caseArchiveResult] = requests;
+
+        if (deskResult.status === 'fulfilled') {
+            state.data.desk = deskResult.value;
+        }
+        if (cockpitResult.status === 'fulfilled') {
+            state.data.cockpit = cockpitResult.value;
+        }
+        if (dayResult.status === 'fulfilled') {
+            state.data.day = dayResult.value;
+        }
+        if (casesResult.status === 'fulfilled') {
+            state.data.cases = casesResult.value;
+        }
+        if (qualityResult.status === 'fulfilled') {
+            state.data.quality = qualityResult.value;
+        }
+        if (tasksResult.status === 'fulfilled') {
+            state.data.tasks = tasksResult.value;
+        }
+
+        if (operationalResult.status === 'fulfilled') {
+            const v = operationalResult.value;
+            if (v && typeof v === 'object' && v.ok && v.snapshot && v.snapshot.feed) {
+                state.data.operationalFeed = { ok: true, snapshot: v.snapshot, message: '', loadError: null };
+            } else if (v && typeof v === 'object' && v.ok) {
+                state.data.operationalFeed = {
+                    ok: true,
+                    snapshot: null,
+                    message: typeof v.message === 'string' ? v.message : '',
+                    loadError: null,
+                };
+            } else {
+                state.data.operationalFeed = { ok: false, snapshot: null, message: '', loadError: null };
+            }
+        } else {
+            const reason = operationalResult.reason;
+            state.data.operationalFeed = {
+                ok: false,
+                snapshot: null,
+                message: '',
+                loadError: reason && reason.message ? String(reason.message) : 'Nie udało się pobrać operational feed.',
+            };
+        }
+
+        if (lastIngressResult.status === 'fulfilled') {
+            state.data.lastIngress = lastIngressResult.value;
+        } else {
+            state.data.lastIngress = { ok: false, snapshot: null, message: '' };
+        }
+
+        if (cohortListResult.status === 'fulfilled') {
+            const cl = cohortListResult.value;
+            if (cl && typeof cl === 'object' && cl.ok && Array.isArray(cl.items)) {
+                state.data.cohortList = { ok: true, items: cl.items, loadError: null };
+            } else {
+                state.data.cohortList = { ok: false, items: [], loadError: null };
+            }
+        } else {
+            const reason = cohortListResult.reason;
+            state.data.cohortList = {
+                ok: false,
+                items: [],
+                loadError: reason && reason.message ? String(reason.message) : 'Nie udało się pobrać listy kohort.',
+            };
+        }
+
+        if (caseArchiveResult.status === 'fulfilled') {
+            const arch = caseArchiveResult.value;
+            const items = arch && Array.isArray(arch.items) ? arch.items : [];
+            const ids = arch && Array.isArray(arch.ids)
+                ? arch.ids
+                : items.map(row => String(row.case_id || '').trim()).filter(Boolean);
+            state.data.caseArchive = { ok: true, items, ids, loadError: null };
+        } else {
+            const reason = caseArchiveResult.reason;
+            state.data.caseArchive = {
+                ok: false,
+                items: [],
+                ids: [],
+                loadError: reason && reason.message ? String(reason.message) : 'Nie udało się pobrać archiwum.',
+            };
+        }
+
+        const rejected = requests.filter(item => item.status === 'rejected');
+        if (rejected.length) {
+            const unauthorized = rejected.find(item => item.reason && item.reason.status === 401);
+            if (unauthorized) {
+                showLoginScreen();
+                return;
+            }
+            showError('Nie udało się wczytać pełnego widoku. Widok zgodności pozostaje dostępny.');
+        }
+
+        renderCurrentView();
+    } finally {
+        if (viewRoot) {
+            viewRoot.removeAttribute('aria-busy');
+        }
+    }
+}
+
+const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'last_ingress', 'cohort_runs']);
+
+function normalizeMainViewId(raw) {
+    const id = String(raw || '').trim();
+    if (KNOWN_MAIN_VIEWS.has(id)) {
+        return id;
+    }
+    if (id === 'last-ingress') {
+        return 'last_ingress';
+    }
+    return '';
+}
+
+function resolveNavButtonViewId(button) {
+    if (!button) {
+        return '';
+    }
+    const fromAttr = button.getAttribute('data-view');
+    if (fromAttr !== null && String(fromAttr).trim() !== '') {
+        return normalizeMainViewId(fromAttr);
+    }
+    return normalizeMainViewId(button.dataset.view);
+}
+
+let lastIngressViewRequestId = 0;
+
+function viewConfig() {
+    return {
+        desk: {
+            title: 'Biurko',
+            subtitle: 'Na czym skupić uwagę — operational feed z Node B (read-only).',
+        },
+        cockpit: {
+            title: 'Cockpit V3',
+            subtitle: 'Podgląd projekcji: sprawa, dowody, braki, sygnały (read-only).',
+        },
+        day: {
+            title: 'Dzień operacyjny',
+            subtitle: 'Szerszy horyzont dnia bez poczucia pracy na skrzynce.',
+        },
+        cases: {
+            title: 'Sprawy',
+            subtitle: 'Aktywne sprawy — sortowanie od najnowszej aktywności (data sygnału lub aktualizacji).',
+        },
+        archive: {
+            title: 'Archiwum',
+            subtitle: 'Sprawy ukryte z listy aktywnej. Przywróć, gdy temat wraca do pracy.',
+        },
+        quality: {
+            title: 'Jakość AI',
+            subtitle: 'Prosty panel trafności, decyzji i problemów z feedbacku.',
+        },
+        tasks: {
+            title: 'Zadania',
+            subtitle: 'Widok przejściowy i warstwa zgodności.',
+        },
+        last_ingress: {
+            title: 'Ostatni ingress',
+            subtitle: 'Podgląd jakości bounded Gmail ingress (read-only, bez biurka spraw).',
+        },
+        cohort_runs: {
+            title: 'Uruchomienia kohorty',
+            subtitle: 'Lista bounded cohort z Node B (read-only) — szczegóły w panelu bocznym.',
+        },
+    };
+}
+
+function installDaszekNavHandlers() {
+    const app = document.getElementById('app');
+    if (!app || app.dataset.navBound === '1') {
+        return;
+    }
+    app.dataset.navBound = '1';
+    app.addEventListener('click', event => {
+        const moreItem = event.target.closest('.view-tab-more-item');
+        if (moreItem && app.contains(moreItem)) {
+            const next = resolveNavButtonViewId(moreItem);
+            if (next) {
+                state.currentView = next;
+                syncViewToUrl(next);
+                renderCurrentView();
+                const menu = document.getElementById('view-tabs-more-menu');
+                if (menu) {
+                    menu.hidden = true;
+                }
+            }
+            return;
+        }
+        const button = event.target.closest('.nav-link, .view-tab');
+        if (!button || !app.contains(button)) {
+            return;
+        }
+        const next = resolveNavButtonViewId(button);
+        if (!next) {
+            console.warn('Daszek nav: brak lub nieznany atrybut data-view', button);
+            return;
+        }
+        state.currentView = next;
+        syncViewToUrl(next);
+        renderCurrentView();
+    });
+    const moreBtn = document.getElementById('view-tabs-more-btn');
+    const moreMenu = document.getElementById('view-tabs-more-menu');
+    if (moreBtn && moreMenu) {
+        moreBtn.addEventListener('click', event => {
+            event.stopPropagation();
+            moreMenu.hidden = !moreMenu.hidden;
+        });
+        document.addEventListener('click', () => {
+            moreMenu.hidden = true;
+        });
+    }
+}
+
+function setViewHeader(title, subtitle) {
+    const header = document.getElementById('view-header');
+    if (!header) {
+        return;
+    }
+    const freshness = operationalFeedHumanTimestampLine();
+    header.innerHTML = `
+        <div>
+            <p class="eyebrow">Biurko operacyjne TOP-INSTAL</p>
+            <h2>${escapeHtml(title)}</h2>
+            <p>${escapeHtml(subtitle)}</p>
+            ${freshness ? `<p class="ds-freshness detail-muted">${escapeHtml(freshness)}</p>` : ''}
+        </div>
+    `;
+}
+
+function syncViewTabsActive(viewKey) {
+    document.querySelectorAll('.view-tab').forEach(button => {
+        const id = resolveNavButtonViewId(button);
+        button.classList.toggle('active', id === viewKey);
+        button.setAttribute('aria-current', id === viewKey ? 'page' : 'false');
+    });
+    document.querySelectorAll('.view-tab-more-item').forEach(button => {
+        const id = resolveNavButtonViewId(button);
+        button.classList.toggle('active', id === viewKey);
+    });
+    const moreBtn = document.getElementById('view-tabs-more-btn');
+    if (moreBtn) {
+        moreBtn.classList.toggle('active', MORE_VIEW_TABS.includes(viewKey));
+    }
+}
+
+function updateSidebarSummary() {
+    const summary = document.getElementById('view-summary');
+    let visible = 0;
+    let nowCount = 0;
+    let casesCount = 0;
+
+    if (hasOperationalFeedSnapshot()) {
+        const feed = getOperationalFeed();
+        visible = (feed.desk || []).length;
+        casesCount = (feed.cases || []).length;
+        const sections = ((feed.day || {}).sections || []);
+        nowCount = sections.find(section => section.key === 'teraz')?.items?.length || 0;
+        if (!nowCount && (!sections.length || !sections.some(s => (s.items || []).length))) {
+            nowCount = Math.min(3, casesCount);
+        }
+    } else {
+        visible = (state.data.desk.items || []).length;
+        nowCount = (state.data.day.sections || []).find(section => section.key === 'teraz')?.items.length || 0;
+        casesCount = (state.data.cases.items || []).length;
+    }
+
+    summary.innerHTML = `
+        <h2>Stan biurka</h2>
+        <div class="summary-grid">
+            <div><span>Na biurku</span><strong>${visible}</strong></div>
+            <div><span>Teraz</span><strong>${nowCount}</strong></div>
+            <div><span>Sprawy</span><strong>${casesCount}</strong></div>
+        </div>
+        <details class="sidebar-help-details detail-tech">
+            <summary>Pomoc dla operatora</summary>
+            <p class="detail-muted">Biurko pokazuje, na co zwrócić uwagę. Przycisk «Zła sprawa» poprawia błędne powiązanie maila ze sprawą. Szczegóły techniczne są pod «+» na dole ekranu. Pełny przewodnik: repozytorium <code>docs/dev/DASZEK_OPERATOR_ONBOARDING_PL.md</code>.</p>
+        </details>
+        ${hasOperationalFeedSnapshot() ? '' : '<p class="detail-muted sidebar-feed-hint">Brak zasilenia z serwera — podsumowanie z magazynu lokalnego.</p>'}
+    `;
+}
+
+function renderCurrentView() {
+    updateSidebarSummary();
+    const configs = viewConfig();
+    let viewKey = normalizeMainViewId(state.currentView);
+    if (!viewKey || !configs[viewKey]) {
+        viewKey = 'desk';
+        state.currentView = 'desk';
+    }
+    const config = configs[viewKey];
+    setViewHeader(config.title, config.subtitle);
+
+    syncViewTabsActive(viewKey);
+
+    if (viewKey === 'desk') {
+        renderDeskView();
+    } else if (viewKey === 'cockpit') {
+        renderCockpitView();
+    } else if (viewKey === 'day') {
+        renderDayView();
+    } else if (viewKey === 'cases') {
+        renderCasesView();
+    } else if (viewKey === 'archive') {
+        renderArchiveView();
+    } else if (viewKey === 'quality') {
+        renderQualityView();
+    } else if (viewKey === 'last_ingress') {
+        void startLastIngressViewLoad();
+    } else if (viewKey === 'cohort_runs') {
+        renderCohortRunsView();
+    } else {
+        renderTasksView();
+    }
+}
+
+function renderFeedAttentionSummary(feed) {
+    const f = feed && typeof feed === 'object' ? feed : {};
+    const cases = f.cases || [];
+    let conflicts = 0;
+    let gaps = 0;
+    let proposals = 0;
+    let svc = 0;
+    let mkt = 0;
+    cases.forEach(c => {
+        conflicts += conflictCountFor(c);
+        gaps += gapCountFor(c);
+        proposals += countArray(c.action_proposals) + countArray(c.proposed_next_actions);
+        svc += countArray(c.service_signals);
+        mkt += countArray(c.marketing_signals);
+    });
+    const desk = f.desk || [];
+    const waitingDesk = desk.filter(d => String(d.operational_status || '').toLowerCase() === 'waiting'
+        || countArray(d.blockers) > 0
+        || d.maintenance_guard?.blocked).length;
+    const attentionIssues = conflicts + gaps;
+    const l1 = `
+        <div class="ds-metric-strip" role="group" aria-label="Najważniejsze metryki">
+            <div class="ds-metric-card"><span>Kartki na biurku</span><strong>${escapeHtml(String(desk.length))}</strong></div>
+            <div class="ds-metric-card"><span>Sprawy w feedzie</span><strong>${escapeHtml(String(cases.length))}</strong></div>
+            <div class="ds-metric-card"><span>Uwaga: sprzeczności i braki</span><strong>${escapeHtml(String(attentionIssues))}</strong></div>
+            <div class="ds-metric-card"><span>Oczekujące / blokady</span><strong>${escapeHtml(String(waitingDesk))}</strong></div>
+        </div>`;
+
+    return `
+        <section class="section-block feed-attention-summary">
+            <div class="section-header">
+                <h3>Na czym mam się skupić teraz</h3>
+            </div>
+            ${projectionBoundaryHtml()}
+            ${l1}
+            <details class="ds-metric-more">
+                <summary>Więcej metryk ze snapshotu</summary>
+                <div class="ds-metric-grid-inner" role="group" aria-label="Rozszerzone metryki">
+                    <div><span>Sprzeczności (łącznie)</span><strong>${escapeHtml(String(conflicts))}</strong></div>
+                    <div><span>Braki danych</span><strong>${escapeHtml(String(gaps))}</strong></div>
+                    <div><span>Propozycje działań</span><strong>${escapeHtml(String(proposals))}</strong></div>
+                    <div><span>Sygnały serwisowe</span><strong>${escapeHtml(String(svc))}</strong></div>
+                    <div><span>Sygnały marketingowe</span><strong>${escapeHtml(String(mkt))}</strong></div>
+                </div>
+            </details>
+        </section>
+    `;
+}
+
+function buildFeedDaySections(feed) {
+    const dayObj = feed.day || {};
+    const raw = Array.isArray(dayObj.sections) ? dayObj.sections : [];
+    const hasAnyItems = raw.some(sec => (sec.items || []).length > 0);
+    if (hasAnyItems) {
+        return { sections: raw, usedFallback: false };
+    }
+    const sections = [];
+    const caseItems = (feed.cases || []).filter(item => !isGatebTestArtifact(item)).filter(item => matchesSearch([
+        item.title,
+        item.summary,
+        item.operator_brief_pl,
+        item.case_id,
+    ])).slice(0, 10);
+    const taskItems = (feed.tasks || []).filter(item => matchesSearch([
+        item.title,
+        item.summary,
+        item.linked_case_id,
+        item.source_type,
+    ])).slice(0, 12);
+    if (caseItems.length) {
+        sections.push({
+            key: 'feed_cases',
+            title: 'Najbliższe sprawy',
+            subtitle: 'Z operational feed',
+            items: caseItems,
+            renderKind: 'case',
+        });
+    }
+    if (taskItems.length) {
+        sections.push({
+            key: 'feed_tasks',
+            title: 'Zadania w snapshotcie',
+            subtitle: 'Z operational feed',
+            items: taskItems,
+            renderKind: 'task',
+        });
+    }
+    return { sections, usedFallback: true };
+}
+
+function renderFeedDaySectionRow(section) {
+    const kind = section.renderKind || 'note';
+    return (section.items || []).map(item => {
+        if (kind === 'case') {
+            return renderOperationalCaseRecord(item);
+        }
+        if (kind === 'task') {
+            return renderFeedTaskRow(item, { compact: true });
+        }
+        return renderOperationalNoteRecord(item, { showDone: false, compact: true });
+    }).join('');
+}
+
+function renderFeedTaskRow(task, { compact = false } = {}) {
+    const t = task || {};
+    const title = firstNonEmpty(t.title, 'Zadanie');
+    const summary = limitText(firstNonEmpty(t.summary, t.note), compact ? 88 : 130);
+    const caseId = firstNonEmpty(t.linked_case_id, t.case_id);
+    const src = humanizeCode(t.source_type || 'źródło', 'źródło');
+    const risk = t.risk_level ? polishRiskLevel(t.risk_level) : '';
+    const approval = t.requires_approval ? '<span class="record-badge record-badge-risk">Wymaga akceptacji</span>' : '';
+    const evidenceN = countArray(t.evidence_refs);
+    const readOnlyFeed = t.feed_read_only !== false;
+    const actions = [];
+    if (caseId) {
+        actions.push(`<button type="button" class="btn btn-ghost btn-small" data-open-case="${escapeHtml(caseId)}">Otwórz sprawę</button>`);
+    }
+    if (!readOnlyFeed && t.task_id) {
+        actions.push(`<button type="button" class="btn btn-secondary btn-small" data-task-done="${escapeHtml(t.task_id)}">Zrobione</button>`);
+        actions.push(`<button type="button" class="btn btn-ghost btn-small" data-task-due="${escapeHtml(t.task_id)}">Termin</button>`);
+    } else if (readOnlyFeed) {
+        actions.push('<span class="detail-muted">Zadanie z migawki — bez poleceń wykonania z UI.</span>');
+    }
+    return `
+        <article class="operational-record operational-record-task">
+            <div class="record-main">
+                <div class="record-top">
+                    <span class="record-type">${escapeHtml(src)}</span>
+                    <span class="record-status">${escapeHtml(humanizeCode(t.status, 'status'))}</span>
+                </div>
+                <h3>${escapeHtml(title)}</h3>
+                ${summary ? `<p class="record-summary">${escapeHtml(summary)}</p>` : ''}
+                <div class="record-badges">${approval}${risk ? `<span class="record-badge">${escapeHtml(risk)}</span>` : ''}${evidenceN ? `<span class="record-badge">Dowody: ${escapeHtml(String(evidenceN))}</span>` : ''}</div>
+            </div>
+            <div class="record-actions">${actions.join('')}</div>
+        </article>
+    `;
+}
+
+function renderDeskView() {
+    const root = document.getElementById('view-root');
+    const op = state.data.operationalFeed || {};
+
+    if (op.loadError) {
+        root.innerHTML = wrapOperationalViewShell('Biurko', `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Nie udało się pobrać operational feed</h3>
+                <p>${escapeHtml(op.loadError)}</p>
+                <p class="detail-muted">Sprawdź sesję operatora lub endpoint <code>/wp-json/daszek/v3/operational-feed-snapshots/latest</code>. Błąd 401 przy mostku oznacza inny problem niż brak sesji operatora.</p>
+            </section>
+        `);
+        return;
+    }
+
+    if (!hasOperationalFeedSnapshot()) {
+        root.innerHTML = wrapOperationalViewShell('Biurko', `
+            <section class="empty-state ds-state">
+                <h3>Brak zasilenia biurka z Node B</h3>
+                <p>Operational feed nie został jeszcze zapisany w Daszek V3. Uruchom eksporter <code>daszek_v3_operational_feed.py</code> i wyślij snapshot metodą POST (bridge token lub sesja + CSRF).</p>
+                ${projectionBoundaryHtml()}
+            </section>
+        `);
+        return;
+    }
+
+    const feed = getOperationalFeed();
+    const items = (feed.desk || []).filter(item => !isGatebTestArtifact(item)).filter(item => matchesSearch([
+        item.title,
+        item.summary,
+        item.why_on_desk,
+        item.case_title,
+        item.operator_brief_pl,
+        item.operator_essence_pl,
+    ]));
+
+    if (!items.length) {
+        root.innerHTML = wrapOperationalViewShell('Biurko', `
+            ${renderFeedAttentionSummary(feed)}
+            <section class="empty-state ds-state">
+                <h3>Biurko jest spokojne</h3>
+                <p>W aktualnym snapshotcie operational feed nie ma kartek na biurku.</p>
+            </section>
+        `);
+        return;
+    }
+
+    const sections = groupDeskItems(items);
+    root.innerHTML = wrapOperationalViewShell('Biurko', `
+        ${renderFeedAttentionSummary(feed)}
+        <div class="ops-board">
+            ${sections.map(section => renderOperationalSection(section, { limit: section.key === 'now' ? 5 : 8, showDone: false })).join('')}
+        </div>
+    `);
+}
+
+function cockpitProjectionFootnote(caseCount, cohortCount, substrate) {
+    const sc = substrate || {};
+    const cc = Number(sc.case_count || 0);
+    const conflicts = Number(sc.conflict_count || 0);
+    const gaps = Number(sc.gap_count || 0);
+    if (!cc && !caseCount && !cohortCount) {
+        return '<p class="detail-muted">System nie ma jeszcze wystarczających danych do rekomendacji w tym widoku.</p>';
+    }
+    const parts = [];
+    if (!conflicts) {
+        parts.push('Brak wykrytych sprzeczności w zliczonym zakresie.');
+    }
+    if (!gaps) {
+        parts.push('Brak widocznych braków danych.');
+    }
+    if (!parts.length) {
+        return '';
+    }
+    return `<p class="detail-muted">${escapeHtml(parts.join(' '))}</p>`;
+}
+
+function renderCockpitView() {
+    const cockpit = state.data.cockpit || {};
+    const substrate = cockpit.substrate || {};
+    const cohortRuns = cockpit.cohort_runs || [];
+    const cases = ((cockpit.cases || {}).items || state.data.cases.items || []).filter(item => matchesSearch([
+        item.title,
+        item.summary,
+        item.case_key,
+        item.operator_brief_pl,
+    ])).slice(0, 12);
+    const root = document.getElementById('view-root');
+    const foot = cockpitProjectionFootnote(cases.length, cohortRuns.length, substrate);
+    root.innerHTML = wrapDaszekViewShell(['Cockpit V3'], `
+        <section class="section-block">
+            <div class="section-header">
+                <h3>Co wiemy</h3>
+                <span>${escapeHtml(String(substrate.case_count || 0))}</span>
+            </div>
+            <p class="detail-muted">Zbiorczy podgląd z projekcji Node B (read-only).</p>
+            <div class="summary-grid summary-grid-wide">
+                <div><span>Sprawy</span><strong>${escapeHtml(String(substrate.case_count || 0))}</strong></div>
+                <div><span>Dowody</span><strong>${escapeHtml(String(substrate.evidence_card_count || 0))}</strong></div>
+                <div><span>Sprzeczności</span><strong>${escapeHtml(String(substrate.conflict_count || 0))}</strong></div>
+                <div><span>Braki danych</span><strong>${escapeHtml(String(substrate.gap_count || 0))}</strong></div>
+                <div><span>Sygnały serwisowe</span><strong>${escapeHtml(String(substrate.service_signal_count || 0))}</strong></div>
+                <div><span>Sygnały marketingowe</span><strong>${escapeHtml(String(substrate.marketing_signal_count || 0))}</strong></div>
+            </div>
+            ${foot}
+        </section>
+        <section class="section-block">
+            <div class="section-header">
+                <h3>Ostatni przebieg kohorty</h3>
+                <span>${escapeHtml(String(cohortRuns.length))}</span>
+            </div>
+            ${cohortRuns.length ? `
+                <div class="case-grid">
+                    ${cohortRuns.map(renderCohortRunCard).join('')}
+                </div>
+            ` : `
+                <section class="empty-state ds-state">
+                    <h3>Brak zapisanych przebiegów kohorty</h3>
+                    <p>Ta sekcja jest niedostępna dopóki Node B nie zapisze projekcji bounded cohort (read-only).</p>
+                </section>
+            `}
+        </section>
+        <section class="section-block">
+            <div class="section-header">
+                <h3>Sprawy z najbogatszym kontekstem</h3>
+                <span>${escapeHtml(String(cases.length))}</span>
+            </div>
+            ${cases.length ? `<section class="case-grid">${cases.map(renderCockpitCaseCard).join('')}</section>` : `
+                <section class="empty-state ds-state">
+                    <h3>Brak spraw do pokazania</h3>
+                    <p>Brak danych jeszcze w tej projekcji albo filtr wyszukiwania ukrywa wyniki.</p>
+                </section>
+            `}
+        </section>
+    `);
+}
+
+function renderCohortRunCard(run) {
+    const counts = run.counts || {};
+    const rid = escapeHtml(String(run.run_id || '').trim());
+    return `
+        <article class="case-card cohort-run-card">
+            <div class="case-meta">
+                <span>${escapeHtml(run.schema_version || 'cohort_proof_run.v1')}</span>
+                <span>${escapeHtml(formatDate(run.generated_at || run.projected_at))}</span>
+            </div>
+            <h3>${escapeHtml(run.run_id || 'cohort run')}</h3>
+            <dl class="case-stats">
+                <div><dt>Gmail</dt><dd>${escapeHtml(String(counts.gmail_selected || 0))}</dd></div>
+                <div><dt>Drive</dt><dd>${escapeHtml(String(counts.drive_documents_selected || 0))}</dd></div>
+                <div><dt>Wspólne (Gmail + Dysk)</dt><dd>${escapeHtml(String(counts.shared_gmail_drive_case_count || 0))}</dd></div>
+            </dl>
+            ${rid ? `<p class="cohort-run-actions"><button type="button" class="btn btn-secondary btn-small" data-open-cohort-run="${rid}">Szczegóły</button></p>` : ''}
+        </article>
+    `;
+}
+
+function renderCohortRunsView() {
+    const root = document.getElementById('view-root');
+    const cl = state.data.cohortList || { ok: false, items: [], loadError: null };
+    if (cl.loadError) {
+        root.innerHTML = wrapDaszekViewShell(['Uruchomienia kohorty'], `
+            <section class="section-block">
+                <div class="section-header">
+                    <h3>Uruchomienia kohorty</h3>
+                </div>
+                <section class="empty-state ds-state ds-state--error" role="alert">
+                    <h3>Błąd wczytywania listy</h3>
+                    <p class="error-inline">${escapeHtml(cl.loadError)}</p>
+                    <p class="detail-muted">Sprawdź sesję operatora lub uprawnienia do endpointu <code>/wp-json/daszek/v3/cohort-runs</code>.</p>
+                </section>
+            </section>
+        `);
+        return;
+    }
+    const items = (cl.items || []).filter(item => matchesSearch([
+        item.run_id,
+        item.schema_version,
+        String((item.counts || {}).gmail_selected || ''),
+    ]));
+    if (!items.length) {
+        root.innerHTML = wrapDaszekViewShell(['Uruchomienia kohorty'], `
+            <section class="section-block">
+                <div class="section-header">
+                    <h3>Uruchomienia kohorty</h3>
+                </div>
+                <section class="empty-state ds-state">
+                    <h3>Brak zapisanych przebiegów</h3>
+                    <p>Node B nie zapisał jeszcze bounded cohort w magazynie v2/v3 — widok jest pusty (read-only).</p>
+                </section>
+            </section>
+        `);
+        return;
+    }
+    root.innerHTML = wrapDaszekViewShell(['Uruchomienia kohorty'], `
+        <section class="section-block">
+            <div class="section-header">
+                <h3>Lista przebiegów</h3>
+                <span>${escapeHtml(String(items.length))}</span>
+            </div>
+            <p class="detail-muted">Wybierz przebieg, aby zobaczyć payload w panelu szczegółów (bez wykonywania akcji).</p>
+            <div class="case-grid">
+                ${items.map(renderCohortRunCard).join('')}
+            </div>
+        </section>
+    `);
+}
+
+async function openCohortRunDetail(runId) {
+    const rid = String(runId || '').trim();
+    if (!rid) {
+        return;
+    }
+    state.detail = {
+        type: 'cohort_run',
+        payload: { run_id: rid, run: null, loading: true, error: '' },
+    };
+    setDetailPanelChromeOpen(true);
+    renderDetailPanel();
+    try {
+        const data = await apiFetch(V3_API_BASE, `/cohort-runs/${encodeURIComponent(rid)}`);
+        if (data && typeof data === 'object' && data.ok && data.cohort_run) {
+            state.detail = {
+                type: 'cohort_run',
+                payload: { run_id: rid, run: data.cohort_run, loading: false, error: '' },
+            };
+        } else {
+            state.detail = {
+                type: 'cohort_run',
+                payload: { run_id: rid, run: null, loading: false, error: 'Brak danych przebiegu w odpowiedzi API.' },
+            };
+        }
+    } catch (err) {
+        state.detail = {
+            type: 'cohort_run',
+            payload: { run_id: rid, run: null, loading: false, error: String(err.message || err) },
+        };
+    }
+    renderDetailPanel();
+}
+
+function renderCockpitCaseCard(item) {
+    const evidenceCount = (item.evidence_cards || []).length;
+    const conflictCount = (item.operator_visible_conflicts || item.conflicting_facts || []).length;
+    const gapCount = (item.completeness_gaps || []).length;
+    const signalCount = (item.service_signals || []).length + (item.marketing_signals || []).length;
+    const title = item.title || item.case_key || 'Sprawa operacyjna';
+    const openCaseLabel = `Otwórz sprawę: ${limitText(title, 60)}`;
+    const opPill = item.operational_status ? `<span class="status-pill ${operationalStatusPillClass(item.operational_status)}">${escapeHtml(String(item.operational_status))}</span>` : '';
+    return `
+        <article class="case-card" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}">
+            <div class="case-meta">
+                <span>${escapeHtml(item.family_label || caseFamilyLabel(item.family))}</span>
+                <span>${escapeHtml(item.status_label || caseStatusLabel(item.status))}${opPill}</span>
+            </div>
+            <h3>${escapeHtml(title)}</h3>
+            <p>${escapeHtml(item.summary || item.operator_brief_pl || 'Brak skrótu sprawy.')}</p>
+            <dl class="case-stats">
+                <div><dt>Dowody</dt><dd>${escapeHtml(String(evidenceCount))}</dd></div>
+                <div><dt>Sprzeczności</dt><dd>${escapeHtml(String(conflictCount))}</dd></div>
+                <div><dt>Braki</dt><dd>${escapeHtml(String(gapCount))}</dd></div>
+                <div><dt>Sygnały</dt><dd>${escapeHtml(String(signalCount))}</dd></div>
+            </dl>
+        </article>
+    `;
+}
+
+function renderDayView() {
+    const root = document.getElementById('view-root');
+    const op = state.data.operationalFeed || {};
+
+    if (op.loadError) {
+        root.innerHTML = wrapOperationalViewShell('Dzień operacyjny', `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Nie udało się pobrać operational feed</h3>
+                <p>${escapeHtml(op.loadError)}</p>
+            </section>
+        `);
+        return;
+    }
+
+    if (!hasOperationalFeedSnapshot()) {
+        root.innerHTML = wrapOperationalViewShell('Dzień operacyjny', `
+            <section class="empty-state ds-state">
+                <h3>Brak zasilenia dnia operacyjnego z Node B</h3>
+                <p>Operational feed nie jest dostępny. Dzień operacyjny wymaga migawki z Node B.</p>
+            </section>
+        `);
+        return;
+    }
+
+    const feed = getOperationalFeed();
+    const { sections: rawSections, usedFallback } = buildFeedDaySections(feed);
+    const sections = rawSections.map(section => ({
+        ...section,
+        items: (section.items || []).filter(item => {
+            if (section.renderKind === 'case') {
+                return matchesSearch([item.title, item.summary, item.operator_brief_pl, item.case_id]);
+            }
+            if (section.renderKind === 'task') {
+                return matchesSearch([item.title, item.summary, item.linked_case_id, item.source_type]);
+            }
+            return matchesSearch([item.title, item.summary, item.why_on_desk, item.case_title]);
+        }),
+    }));
+    const nonEmptySections = sections.filter(section => section.items.length);
+
+    if (!nonEmptySections.length) {
+        root.innerHTML = wrapOperationalViewShell('Dzień operacyjny', `
+            <section class="empty-state ds-state">
+                <h3>Brak wpisów na dziś</h3>
+                <p>Snapshot operacyjny nie zawiera jeszcze planu dnia i nie ma spraw ani zadań do pokazania.</p>
+                ${projectionBoundaryHtml()}
+            </section>
+        `);
+        return;
+    }
+
+    const banner = usedFallback
+        ? '<p class="detail-muted feed-day-fallback">Snapshot nie zawiera jeszcze planu dnia. Pokazuję najbliższe sprawy i zadania.</p>'
+        : '';
+
+    root.innerHTML = wrapOperationalViewShell('Dzień operacyjny', `
+        ${projectionBoundaryHtml()}
+        ${banner}
+        ${nonEmptySections.map(section => `
+        <section class="section-block">
+            <div class="section-header">
+                <h3>${escapeHtml(section.title)}</h3>
+                <span>${section.items.length}</span>
+            </div>
+            ${section.subtitle ? `<p class="detail-muted">${escapeHtml(section.subtitle)}</p>` : ''}
+            <div class="operational-list operational-list-compact">
+                ${renderFeedDaySectionRow(section)}
+            </div>
+        </section>
+    `).join('')}
+    `);
+}
+
+function renderCasesView() {
+    const root = document.getElementById('view-root');
+    const op = state.data.operationalFeed || {};
+
+    if (op.loadError) {
+        root.innerHTML = wrapOperationalViewShell('Sprawy', `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Nie udało się pobrać operational feed</h3>
+                <p>${escapeHtml(op.loadError)}</p>
+            </section>
+        `);
+        return;
+    }
+
+    if (!hasOperationalFeedSnapshot()) {
+        const legacyItems = sortCasesChronologically((state.data.cases.items || []).filter(item => {
+            if (isCaseArchived(item.case_id)) {
+                return false;
+            }
+            return matchesSearch([
+                item.title,
+                item.summary,
+                item.operator_brief_pl,
+                item.primary_next_action_title_pl,
+                item.family_label || item.family,
+                item.case_id,
+            ]);
+        }));
+        if (!legacyItems.length) {
+            root.innerHTML = wrapOperationalViewShell('Sprawy', `
+                <section class="empty-state ds-state">
+                    <h3>Brak aktywnych spraw</h3>
+                    <p>Brak zasilenia operational feed i pusta warstwa v2 — wgraj migawkę Node B lub poczekaj na ingest.</p>
+                </section>
+            `);
+            return;
+        }
+        root.innerHTML = wrapOperationalViewShell('Sprawy', `
+            <p class="detail-muted cases-sort-hint">Warstwa v2 (legacy) — sortowanie od najnowszej aktywności.</p>
+            <section class="operational-list">
+                ${legacyItems.map(item => renderOperationalCaseRecord(item)).join('')}
+            </section>
+        `);
+        return;
+    }
+
+    const feed = getOperationalFeed();
+    const items = sortCasesChronologically((feed.cases || []).filter(item => {
+        if (isGatebTestArtifact(item)) {
+            return false;
+        }
+        if (isCaseArchived(item.case_id)) {
+            return false;
+        }
+        return matchesSearch([
+            item.operator_essence_pl,
+            item.title,
+            item.summary,
+            item.operator_brief_pl,
+            item.primary_next_action_title_pl,
+            item.family_label || item.family,
+            item.current_state_label || item.current_state,
+            item.case_id,
+        ]);
+    }));
+
+    if (!items.length) {
+        root.innerHTML = wrapOperationalViewShell('Sprawy', `
+            <section class="empty-state ds-state">
+                <h3>Brak aktywnych spraw</h3>
+                <p>Operational feed nie zawiera spraw pasujących do wyszukiwania albo wszystkie są w archiwum.</p>
+            </section>
+        `);
+        return;
+    }
+
+    root.innerHTML = wrapOperationalViewShell('Sprawy', `
+        ${projectionBoundaryHtml()}
+        <p class="detail-muted cases-sort-hint">Sortowanie: od najnowszej aktywności.</p>
+        <section class="operational-list">
+            ${items.map(item => renderOperationalCaseRecord(item)).join('')}
+        </section>
+    `);
+}
+
+function renderArchiveView() {
+    const root = document.getElementById('view-root');
+    const arch = state.data.caseArchive || {};
+
+    if (arch.loadError) {
+        root.innerHTML = wrapOperationalViewShell('Archiwum', `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Nie udało się wczytać archiwum</h3>
+                <p>${escapeHtml(arch.loadError)}</p>
+            </section>
+        `);
+        return;
+    }
+
+    const archivedRows = Array.isArray(arch.items) ? arch.items : [];
+    const items = sortCasesChronologically(archivedRows.map(entry => {
+        const cid = String(entry.case_id || '').trim();
+        const live = findCaseRecordById(cid);
+        if (live) {
+            return { ...live, archived_at: entry.archived_at, archived_by: entry.archived_by };
+        }
+        return {
+            case_id: cid,
+            title: firstNonEmpty(entry.title, cid),
+            summary: entry.summary || '',
+            latest_signal_at: entry.latest_signal_at || entry.archived_at || '',
+            archived_at: entry.archived_at,
+            archived_by: entry.archived_by,
+        };
+    }).filter(item => matchesSearch([
+        item.title,
+        item.summary,
+        item.operator_brief_pl,
+        item.case_id,
+        item.archived_by,
+    ])));
+
+    if (!items.length) {
+        root.innerHTML = wrapOperationalViewShell('Archiwum', `
+            <section class="empty-state ds-state">
+                <h3>Archiwum jest puste</h3>
+                <p>Zarchiwizowane sprawy pojawią się tutaj. Aktywne listy nie pokazują ich dalej.</p>
+            </section>
+        `);
+        return;
+    }
+
+    root.innerHTML = wrapOperationalViewShell('Archiwum', `
+        <p class="detail-muted cases-sort-hint">Sortowanie: od najnowszej daty archiwizacji / aktywności.</p>
+        <section class="operational-list">
+            ${items.map(item => renderOperationalCaseRecord(item, { archived: true })).join('')}
+        </section>
+    `);
+}
+
+function renderQualityView() {
+    const root = document.getElementById('view-root');
+    const summary = (state.data.quality && state.data.quality.summary) || {};
+    const tags = summary.top_problem_tags || [];
+    const feedback = summary.recent_feedback || [];
+    const ai = Number(summary.total_ai_suggestions || 0);
+    const acc = Number(summary.accepted_suggestions || 0);
+    const rej = Number(summary.rejected_suggestions || 0);
+    const fb = Number(summary.feedback_count || 0);
+    const isEmptyQuality = !ai && !acc && !rej && !fb && !tags.length && !feedback.length;
+    const emptyExtra = isEmptyQuality ? `
+        <section class="panel-section empty-state ds-state quality-empty">
+            <h3>Brak danych jakości w tym widoku</h3>
+            <p>Wszystkie liczniki są zerowe — albo magazyn v2 nie ma jeszcze agregatu, albo środowisko jest świeże po wdrożeniu.</p>
+            <p class="detail-muted">Operator: zobacz dokumentację jakości AI i job agregujący w repozytorium gmail-agent (read-only UI).</p>
+        </section>
+    ` : '';
+    root.innerHTML = wrapDaszekViewShell(['Jakość AI'], `
+        <section class="panel-section">
+            <div class="stats-grid">
+                <div class="stat-card"><span>Propozycje AI</span><strong>${ai}</strong></div>
+                <div class="stat-card"><span>Zaakceptowane</span><strong>${acc}</strong></div>
+                <div class="stat-card"><span>Odrzucone</span><strong>${rej}</strong></div>
+                <div class="stat-card"><span>Feedback</span><strong>${fb}</strong></div>
+            </div>
+        </section>
+        ${emptyExtra}
+        <section class="panel-section">
+            <h3>Trafność</h3>
+            <div class="summary-grid">
+                <div><span>Accurate</span><strong>${Math.round(Number(summary.accurate_rate || 0) * 100)}%</strong></div>
+                <div><span>Partial</span><strong>${Math.round(Number(summary.partially_accurate_rate || 0) * 100)}%</strong></div>
+                <div><span>Inaccurate</span><strong>${Math.round(Number(summary.inaccurate_rate || 0) * 100)}%</strong></div>
+            </div>
+        </section>
+        <section class="panel-section">
+            <h3>Najczęstsze problemy</h3>
+            ${tags.length ? `<ul class="detail-list">${tags.map(item => `<li><strong>${escapeHtml(item.tag)}</strong><span>${Number(item.count || 0)}</span></li>`).join('')}</ul>` : '<p class="detail-muted">Brak problemów w aktualnym podsumowaniu.</p>'}
+        </section>
+        <section class="panel-section">
+            <h3>Ostatnie feedbacki</h3>
+            ${feedback.length ? `<ul class="detail-list">${feedback.map(item => `<li><strong>${escapeHtml((item.payload && item.payload.rating) || item.rating || 'feedback')}</strong><span>${escapeHtml(item.summary_text || item.detail || '')}</span></li>`).join('')}</ul>` : '<p class="detail-muted">Brak feedbacku.</p>'}
+        </section>
+    `);
+}
+
+function ingressDecisionLabelPl(code) {
+    const map = {
+        ignore: 'Zignorowano',
+        create_case: 'Nowe sprawy',
+        append_to_existing_case: 'Dołączono do spraw',
+        review: 'Do przeglądu',
+        update_case_state: 'Aktualizacja stanu',
+        create_task: 'Utworzono zadania',
+        mark_reference: 'Oznaczono jako referencję',
+    };
+    const key = String(code || '').trim();
+    return map[key] || humanizeCode(key, '—');
+}
+
+async function startLastIngressViewLoad() {
+    const root = document.getElementById('view-root');
+    const requestId = ++lastIngressViewRequestId;
+    const skeletonRows = Array.from({ length: 5 }, () => `
+        <div class="ingress-skeleton-row" aria-hidden="true">
+            <span class="ingress-skeleton-cell ingress-skeleton-cell--long"></span>
+            <span class="ingress-skeleton-cell"></span>
+            <span class="ingress-skeleton-cell ingress-skeleton-cell--short"></span>
+        </div>
+    `).join('');
+    root.innerHTML = wrapDaszekViewShell(['Ostatni ingress'], `
+        <section class="ingress-quality-loading" role="status" aria-live="polite">
+            <div class="ingress-quality-loading-head">
+                <h3>Wczytywanie ostatniego ingressu…</h3>
+                <p class="detail-muted">Pobieranie <code>/wp-json/daszek/v3/ingress-quality-snapshots/latest</code> (sesja operatora).</p>
+            </div>
+            <div class="ingress-skeleton-list" role="progressbar" aria-busy="true" aria-label="Ładowanie listy ingress">
+                ${skeletonRows}
+            </div>
+        </section>
+    `);
+    try {
+        const data = await apiFetch(V3_API_BASE, '/ingress-quality-snapshots/latest');
+        if (requestId !== lastIngressViewRequestId || normalizeMainViewId(state.currentView) !== 'last_ingress') {
+            return;
+        }
+        state.data.lastIngress = data && typeof data === 'object'
+            ? data
+            : { ok: false, snapshot: null, message: 'Niepoprawna odpowiedź serwera.' };
+    } catch (err) {
+        if (requestId !== lastIngressViewRequestId || normalizeMainViewId(state.currentView) !== 'last_ingress') {
+            return;
+        }
+        state.data.lastIngress = {
+            ok: false,
+            snapshot: null,
+            message: err && err.message ? String(err.message) : 'Nie udało się pobrać snapshotu.',
+        };
+    }
+    if (requestId !== lastIngressViewRequestId || normalizeMainViewId(state.currentView) !== 'last_ingress') {
+        return;
+    }
+    renderLastIngressView();
+}
+
+function renderLastIngressView() {
+    const root = document.getElementById('view-root');
+    const wrap = state.data.lastIngress || {};
+    const snap = wrap.snapshot;
+
+    if (!snap) {
+        const hint = wrap.message || 'Brak zapisanego snapshotu ostatniego ingressu.';
+        root.innerHTML = wrapDaszekViewShell(['Ostatni ingress'], `
+            <section class="empty-state ds-state">
+                <h3>${escapeHtml(hint)}</h3>
+                <p>Ten widok czyta zapisany snapshot z Node B. Uruchom eksporter <code>ingress_quality_snapshot.py</code>, a następnie wyślij JSON metodą POST na endpoint Daszek V3 (operator + CSRF albo skonfigurowany bridge token).</p>
+                <p class="detail-muted">Nie uruchamia Gmaila ani LLM. Nie tworzy spraw. Osobny kontekst od operational feed.</p>
+            </section>
+        `);
+        return;
+    }
+
+    const counts = snap.counts || {};
+    const llm = snap.llm || {};
+    const dist = snap.decision_distribution || {};
+    const manual = snap.manual_review_items || [];
+    const failed = snap.failed_items || [];
+    const items = snap.items || [];
+    const runId = snap.run_id || '';
+    const ts = snap.ingested_at || snap.created_at || '';
+
+    const distRows = Object.keys(dist).length
+        ? Object.entries(dist).map(([k, v]) => `
+            <tr><td>${escapeHtml(ingressDecisionLabelPl(k))}</td><td><strong>${escapeHtml(String(v))}</strong></td></tr>
+        `).join('')
+        : '<tr><td colspan="2" class="detail-muted">Brak rozkładu decyzji.</td></tr>';
+
+    const manualRows = manual.length
+        ? manual.map(row => `
+            <tr>
+                <td><code>${escapeHtml(row.message_id || '')}</code></td>
+                <td>${escapeHtml(ingressDecisionLabelPl(row.decision))}</td>
+                <td>${escapeHtml(row.case_id || '—')}</td>
+                <td>${escapeHtml(row.status || '')}</td>
+                <td>${row.truncated ? 'tak' : 'nie'}</td>
+                <td>${escapeHtml(row.operator_question || '')}</td>
+            </tr>
+        `).join('')
+        : '<tr><td colspan="6" class="detail-muted">Brak pozycji oznaczonych do ręcznego przeglądu.</td></tr>';
+
+    const failedSection = failed.length
+        ? failed.map(row => `
+            <article class="case-card">
+                <div class="case-meta"><span>niepowodzenie</span><span>${escapeHtml(row.status || '')}</span></div>
+                <h3><code>${escapeHtml(row.message_id || '')}</code></h3>
+                <p>${escapeHtml(row.non_sensitive_reason || '')}</p>
+                <p class="detail-muted">${escapeHtml(row.recommended_operator_action || '')}</p>
+            </article>
+        `).join('')
+        : '<p class="detail-muted">Brak zapisanych niepowodzeń walidacji.</p>';
+
+    const refs = snap.report_refs && typeof snap.report_refs === 'object' ? snap.report_refs : {};
+    const refList = Object.entries(refs).filter(([, v]) => v).map(([k, v]) => `<li><strong>${escapeHtml(k)}</strong> — <code>${escapeHtml(String(v))}</code></li>`).join('');
+
+    root.innerHTML = wrapDaszekViewShell(['Ostatni ingress'], `
+        <p class="detail-muted feed-detail-banner">Osobny kontekst od operational feed — tylko jakość bounded ingress (read-only).</p>
+        <section class="section-block ingress-quality-banner">
+            <div class="ingress-quality-head">
+                <div>
+                    <p class="eyebrow">${escapeHtml(snap.title || 'Ostatni ingress')}</p>
+                    <h3>${escapeHtml(snap.operator_label || 'Podgląd jakości ingressu — nie tworzy spraw i nie wykonuje akcji')}</h3>
+                    <p class="detail-muted">${escapeHtml(snap.subtitle || '')}</p>
+                </div>
+                <span class="badge badge-readonly">tylko podgląd jakości</span>
+            </div>
+            <p class="ingress-quality-disclaimer">Ten widok pokazuje wynik bounded mail ingress. Nie tworzy spraw, nie wykonuje akcji i nie obchodzi policy.</p>
+            <div class="ingress-quality-meta">
+                <div><span>run_id</span><code>${escapeHtml(runId)}</code>
+                    <button type="button" class="btn btn-secondary btn-compact" data-copy-run-id="${escapeHtml(runId)}">Kopiuj run_id</button>
+                </div>
+                <div><span>Czas snapshotu</span><strong>${escapeHtml(formatDate(ts))}</strong></div>
+            </div>
+        </section>
+
+        <section class="panel-section">
+            <div class="stats-grid">
+                <div class="stat-card"><span>Wybrane</span><strong>${escapeHtml(String(counts.selected_count ?? 0))}</strong></div>
+                <div class="stat-card"><span>Przetworzone</span><strong>${escapeHtml(String(counts.processed_count ?? 0))}</strong></div>
+                <div class="stat-card"><span>OK</span><strong>${escapeHtml(String(counts.valid_count ?? 0))}</strong></div>
+                <div class="stat-card"><span>Błędy</span><strong>${escapeHtml(String(counts.failed_count ?? 0))}</strong></div>
+                <div class="stat-card"><span>Do przeglądu</span><strong>${escapeHtml(String(manual.length))}</strong></div>
+                <div class="stat-card"><span>Zdarzenia rate limit</span><strong>${escapeHtml(String(llm.rate_limit_events ?? 0))}</strong></div>
+                <div class="stat-card"><span>Przycięte wejścia</span><strong>${escapeHtml(String(llm.truncation_count ?? 0))}</strong></div>
+                <div class="stat-card"><span>Push do Daszka (persisted)</span><strong>${escapeHtml(String(snap.daszek_persisted_push_count ?? 0))}</strong></div>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-header"><h3>Infrastruktura i limity</h3></div>
+            <ul class="detail-list">
+                <li><strong>Live Gmail</strong><span>${snap.live_gmail_used ? 'tak' : 'nie'}</span></li>
+                <li><strong>Pamięć skrzynki zmieniona</strong><span>${snap.mailbox_memory_mutated ? 'tak' : 'nie'}</span></li>
+                <li><strong>Outbound actions</strong><span>${snap.outbound_actions ? 'tak' : 'nie'}</span></li>
+                <li><strong>Lokalne podglądy projekcji</strong><span>${escapeHtml(String(snap.local_projection_preview_count ?? 0))}</span></li>
+                <li><strong>Invalid JSON / schema / semantic</strong><span>${escapeHtml([llm.invalid_json, llm.schema_invalid, llm.semantic_invalid].join(' / '))}</span></li>
+            </ul>
+        </section>
+
+        <section class="section-block">
+            <div class="section-header"><h3>Rozkład decyzji (audyt)</h3></div>
+            <table class="ingress-table">
+                <thead><tr><th>Decyzja</th><th>Liczba</th></tr></thead>
+                <tbody>${distRows}</tbody>
+            </table>
+        </section>
+
+        <section class="section-block">
+            <div class="section-header"><h3>Lista do ręcznego sprawdzenia</h3><span>${manual.length}</span></div>
+            <table class="ingress-table">
+                <thead><tr><th>message_id</th><th>Decyzja</th><th>case_id</th><th>status</th><th>Przycięte</th><th>Pytanie</th></tr></thead>
+                <tbody>${manualRows}</tbody>
+            </table>
+        </section>
+
+        <section class="section-block">
+            <div class="section-header"><h3>Niepowodzenia</h3><span>${failed.length}</span></div>
+            <div class="case-grid">${failedSection}</div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-header"><h3>Pełna tabela (sanitized)</h3><span>${items.length}</span></div>
+            <p class="detail-muted">Bez treści maili — tylko identyfikatory i metadane z raportu operatora.</p>
+            <div class="table-scroll">
+            <table class="ingress-table ingress-table-dense">
+                <thead><tr><th>#</th><th>message_id</th><th>Decyzja</th><th>case_id</th><th>status</th><th>Przycięte</th><th>Pytanie</th></tr></thead>
+                <tbody>
+                    ${items.map(row => `
+                        <tr>
+                            <td>${escapeHtml(String(row.index ?? ''))}</td>
+                            <td><code>${escapeHtml(row.message_id || '')}</code></td>
+                            <td>${escapeHtml(ingressDecisionLabelPl(row.decision))}</td>
+                            <td>${escapeHtml(row.case_id || '—')}</td>
+                            <td>${escapeHtml(row.status || '')}</td>
+                            <td>${row.truncated ? 'tak' : 'nie'}</td>
+                            <td>${escapeHtml(row.operator_question || '')}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-header"><h3>Odniesienia do raportów</h3></div>
+            <p class="detail-muted">Ścieżka względna repozytorium Node B: <code>${escapeHtml(snap.source_run_dir_reference || '')}</code></p>
+            <ul class="detail-list">${refList || '<li class="detail-muted">Brak listy plików.</li>'}</ul>
+        </section>
+    `, lastIngressSnapshotMetaLine(snap));
+}
+
+function renderTasksView() {
+    const root = document.getElementById('view-root');
+    const op = state.data.operationalFeed || {};
+
+    if (op.loadError) {
+        root.innerHTML = wrapOperationalViewShell('Zadania', `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Nie udało się pobrać operational feed</h3>
+                <p>${escapeHtml(op.loadError)}</p>
+            </section>
+        `);
+        return;
+    }
+
+    if (!hasOperationalFeedSnapshot()) {
+        root.innerHTML = wrapOperationalViewShell('Zadania', `
+            <section class="empty-state ds-state">
+                <h3>Brak zasilenia zadań z Node B</h3>
+                <p>Zadania w tym widoku pochodzą z operational feed. Legacy zadania v1 pozostają dostępne po wgraniu feedu z listą zadań lub użyj panelu zgodności.</p>
+                <details class="detail-tech detail-collapsible">
+                    <summary>Ręczne zadania v1 (magazyn legacy)</summary>
+                    <div class="detail-tech-body">
+                        <p class="detail-muted">Ta akcja zapisuje się w magazynie v1 na Node A — nie w migawce operational feed.</p>
+                        ${renderManualTaskFormHtml()}
+                        <div class="task-list">${(state.data.tasks || []).filter(task => matchesSearch([task.title, task.note, task.kind, task.source])).map(renderTaskRow).join('') || '<p class="detail-muted">Brak zadań v1.</p>'}</div>
+                    </div>
+                </details>
+            </section>
+        `);
+        return;
+    }
+
+    const feed = getOperationalFeed();
+    const feedTasks = (feed.tasks || []).filter(task => matchesSearch([
+        task.title,
+        task.summary,
+        task.note,
+        task.source_type,
+        task.linked_case_id,
+    ]));
+
+    const feedBody = feedTasks.length
+        ? `<div class="operational-list">${feedTasks.map(t => renderFeedTaskRow(t, { compact: false })).join('')}</div>`
+        : `
+            <section class="empty-state ds-state compact">
+                <h3>Brak zadań w aktualnym snapshotcie</h3>
+                <p>Operational feed nie zawiera zadań lub filtr wyszukiwania ukrywa wyniki.</p>
+            </section>
+        `;
+
+    root.innerHTML = wrapOperationalViewShell('Zadania', `
+        <section class="tasks-fallback">
+            <div class="section-header">
+                <div>
+                    <h3>Zadania (operational feed)</h3>
+                    <p>Zadania z migawki Node B. Wykonanie akcji nadal wymaga ścieżek polityki — UI nie uruchamia automatycznych działań.</p>
+                </div>
+            </div>
+            ${projectionBoundaryHtml()}
+            ${feedBody}
+            <details class="detail-tech detail-collapsible">
+                <summary>Ręczne zadania v1 (legacy)</summary>
+                <div class="detail-tech-body">
+                    <p class="detail-muted">Zapisuje się w magazynie zadań v1 — poza migawką operational feed.</p>
+                    ${renderManualTaskFormHtml()}
+                    <div class="task-list">${(state.data.tasks || []).filter(task => matchesSearch([task.title, task.note, task.kind, task.source])).map(renderTaskRow).join('') || '<p class="detail-muted">Brak zadań v1.</p>'}</div>
+                </div>
+            </details>
+        </section>
+    `);
+}
+
+function renderManualTaskFormHtml() {
+    return `
+            <form id="manual-task-form" class="manual-task-form">
+                <div class="form-row">
+                    <label class="form-group flex-2">
+                        <span>Tytuł</span>
+                        <input type="text" name="title" required placeholder="Np. Telefon do dostawcy albo przypomnienie serwisowe">
+                    </label>
+                    <label class="form-group">
+                        <span>Priorytet</span>
+                        <select name="priority">
+                            <option value="high">wysoki</option>
+                            <option value="medium" selected>średni</option>
+                            <option value="low">niski</option>
+                        </select>
+                    </label>
+                    <label class="form-group">
+                        <span>Termin</span>
+                        <input type="date" name="due_at">
+                    </label>
+                </div>
+                <label class="form-group">
+                    <span>Notatka</span>
+                    <textarea name="note" rows="2" placeholder="Krótki kontekst do ręcznie dodanego przypomnienia"></textarea>
+                </label>
+                <button type="submit" class="btn btn-primary">Dodaj ręczne zadanie</button>
+            </form>`;
+}
+
+function renderNoteCard(item, showFeedback) {
+    const badges = [
+        item.latest_change_source_label
+            ? renderMetaBadge(`Źródło: ${item.latest_change_source_label}`, changeSourceTone(item.latest_change_source))
+            : '',
+        item.latest_change_decision_label
+            ? renderMetaBadge(item.latest_change_decision_label, changeSourceTone(item.latest_change_source))
+            : '',
+        item.latest_change_rule_label
+            ? renderMetaBadge(item.latest_change_rule_label, 'maintenance')
+            : '',
+    ].filter(Boolean).join('');
+    return `
+        <article class="note-card note-${escapeHtml(item.presence_mode || 'standard')}">
+            <button type="button" class="note-open" data-open-note="${escapeHtml(item.note_id)}">
+                <span class="note-presence">${escapeHtml(item.presence_label)}</span>
+                <h3>${escapeHtml(item.title || 'Kartka AI')}</h3>
+                ${renderGuidanceSection(item, { compact: true })}
+                <p class="note-why">${escapeHtml(item.why_on_desk || item.summary || '')}</p>
+                <p class="note-step">${escapeHtml(item.recommended_next_step || 'Sprawdź szczegóły i zdecyduj o kolejnym kroku.')}</p>
+                ${badges ? `<div class="note-meta-badges">${badges}</div>` : ''}
+                ${item.latest_change_reason_pl ? `<p class="note-trust">${escapeHtml(item.latest_change_reason_pl)}</p>` : ''}
+                ${item.maintenance_guard?.blocked ? `<p class="note-guard">${escapeHtml(item.maintenance_guard.reason_pl || 'Świeży manual feedback blokuje maintenance przez 7 dni.')}</p>` : ''}
+                <div class="note-footer">
+                    <span>${escapeHtml(item.case_title || 'Bez przypisanej sprawy')}</span>
+                    <span>${escapeHtml(formatDate(item.updated_at))}</span>
+                </div>
+            </button>
+            <div class="note-actions">
+                <button type="button" class="btn btn-secondary btn-small" data-note-action="to_juz_nieaktualne" data-note-id="${escapeHtml(item.note_id)}">Zrobione</button>
+                ${item.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-open-case="${escapeHtml(item.case_id)}">Otwórz sprawę</button>` : ''}
+                ${showFeedback ? `
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="trafne" data-note-id="${escapeHtml(item.note_id)}">Trafne</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_mocne" data-note-id="${escapeHtml(item.note_id)}">Za mocne</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_slabe" data-note-id="${escapeHtml(item.note_id)}">Za słabe</button>
+                    ${item.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-note-action="tylko_w_sprawie" data-note-id="${escapeHtml(item.note_id)}">Tylko w sprawie</button>` : ''}
+                ` : ''}
+            </div>
+        </article>
+    `;
+}
+
+function renderTaskRow(task) {
+    const isDone = task.status === 'done';
+    const summary = compatibilityTaskSummary(task);
+    return `
+        <article class="task-row ${isDone ? 'task-row-done' : ''}">
+            <div class="task-row-main">
+                <div class="task-row-top">
+                    <h3>${escapeHtml(compatibilityTaskTitle(task))}</h3>
+                    <span class="task-badge">${escapeHtml(priorityLabel(task.priority))}</span>
+                </div>
+                ${summary ? `<p>${escapeHtml(summary)}</p>` : ''}
+                <div class="task-row-meta">
+                    <span>Źródło: ${escapeHtml(taskSourceLabel(task.source))}</span>
+                    <span>Termin: ${escapeHtml(formatDate(task.due_at))}</span>
+                </div>
+            </div>
+            <div class="task-row-actions">
+                ${!isDone ? `<button type="button" class="btn btn-secondary btn-small" data-task-done="${escapeHtml(task.id)}">Zrobione</button>` : '<span class="done-chip">Załatwione</span>'}
+                <button type="button" class="btn btn-ghost btn-small" data-task-due="${escapeHtml(task.id)}">Termin</button>
+            </div>
+        </article>
+    `;
+}
+
+async function openNoteDetail(noteId) {
+    const nid = String(noteId || '').trim();
+    if (!nid) {
+        return;
+    }
+    clearError();
+    const feedItem = findOperationalFeedDeskNote(nid);
+    if (feedItem) {
+        state.detail = {
+            type: 'note',
+            payload: buildNoteDetailPayloadFromFeedDeskItem(feedItem),
+            source: 'operational_feed',
+        };
+        setDetailPanelChromeOpen(true);
+        renderDetailPanel();
+        return;
+    }
+    if (hasOperationalFeedSnapshot() && isFeedProjectionNoteId(nid)) {
+        state.detail = {
+            type: 'detail_error',
+            mode: 'note',
+            id: nid,
+            message: `Kartka „${nid}” nie występuje w bieżącej migawce operational feed. Odśwież zasilenie z Node B.`,
+            httpStatus: 404,
+        };
+        setDetailPanelChromeOpen(true);
+        renderDetailPanel();
+        return;
+    }
+    state.detail = { type: 'detail_loading', mode: 'note', id: nid };
+    setDetailPanelChromeOpen(true);
+    renderDetailPanel();
+    try {
+        const detail = await apiFetch(V2_API_BASE, `/desk-notes/${encodeURIComponent(nid)}`);
+        state.detail = { type: 'note', payload: detail, source: 'v2_live' };
+        renderDetailPanel();
+    } catch (error) {
+        const st = Number(error.status || 0);
+        let msg = String(error.message || 'Błąd wczytania kartki.');
+        if (st === 404 && hasOperationalFeedSnapshot()) {
+            msg = `Kartka „${nid}” nie występuje w magazynie v2 ani w bieżącej migawce operational feed. Odśwież zasilenie z Node B.`;
+        } else if (st === 404) {
+            msg = `Kartka „${nid}” nie istnieje w magazynie v2. Możliwy stary snapshot lub rozjazd zasilenia.`;
+        }
+        state.detail = {
+            type: 'detail_error',
+            mode: 'note',
+            id: nid,
+            message: msg,
+            httpStatus: st,
+        };
+        renderDetailPanel();
+        if (st === 401 || st === 403) {
+            showError(msg);
+        }
+    }
+}
+
+async function openCaseDetail(caseId) {
+    const cid = String(caseId || '').trim();
+    if (!cid) {
+        return;
+    }
+    clearError();
+    const fromFeed = resolveOperationalFeedCaseDetail(cid);
+    if (fromFeed) {
+        state.detail = { type: 'case', payload: fromFeed, source: 'operational_feed' };
+        setDetailPanelChromeOpen(true);
+        renderDetailPanel();
+        return;
+    }
+    state.detail = { type: 'detail_loading', mode: 'case', id: cid };
+    setDetailPanelChromeOpen(true);
+    renderDetailPanel();
+    try {
+        const detail = await apiFetch(V2_API_BASE, `/cases/${encodeURIComponent(cid)}`);
+        let engagementSummary = null;
+        try {
+            const eng = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(cid)}/engagement`);
+            engagementSummary = eng && typeof eng.engagement === 'object' ? eng.engagement : null;
+        } catch (_engErr) {
+            engagementSummary = null;
+        }
+        state.detail = { type: 'case', payload: detail, engagement: engagementSummary, source: 'v2_live' };
+        renderDetailPanel();
+    } catch (error) {
+        const st = Number(error.status || 0);
+        let msg = String(error.message || 'Błąd wczytania sprawy.');
+        if (st === 404 && hasOperationalFeedSnapshot()) {
+            msg = `Sprawa „${cid}” nie występuje w magazynie v2 ani w bieżącej migawce operational feed. Odśwież zasilenie z Node B.`;
+        } else if (st === 404) {
+            msg = `Sprawa „${cid}” nie istnieje w magazynie v2. Możliwy stary snapshot lub rozjazd zasilenia.`;
+        }
+        state.detail = {
+            type: 'detail_error',
+            mode: 'case',
+            id: cid,
+            message: msg,
+            httpStatus: st,
+        };
+        renderDetailPanel();
+        if (st === 401 || st === 403) {
+            showError(msg);
+        }
+    }
+}
+
+function renderSignalItems(signals) {
+    if (!signals || !signals.length) {
+        return '<p class="detail-muted">Brak zapisanych źródeł.</p>';
+    }
+    return signals.map(signal => {
+        const observedAt = signal.observed_at || ((signal.source_ref || {}).received_at) || '';
+        const sourceLine = observedAt
+            ? `Źródło: Gmail • ${escapeHtml(formatDate(observedAt))}`
+            : 'Źródło: Gmail';
+        return `
+            <li>
+                <strong>${escapeHtml((signal.intake || {}).primary_signal_name || 'Sygnał')}</strong>
+                <span> • ${escapeHtml((signal.intake || {}).business_area_label || businessAreaLabel((signal.intake || {}).business_area))}</span>
+                <div class="detail-muted">${sourceLine}</div>
+            </li>
+        `;
+    }).join('');
+}
+
+function renderTraceItems(traces) {
+    if (!traces || !traces.length) {
+        return '<p class="detail-muted">Brak śladu decyzji.</p>';
+    }
+    return traces.map(trace => `
+        <li>
+            <strong>${escapeHtml(trace.decision_type_label || decisionTypeLabel(trace.decision_type))}</strong>
+            <div>${escapeHtml(trace.reason_summary_pl || '')}</div>
+            <div class="detail-muted">
+                ${escapeHtml(trace.actor_source_label || trace.actor || 'Intake AI')}
+                • ${escapeHtml(formatDate(trace.created_at))}
+                ${trace.maintenance_rule_label_pl ? ` • ${escapeHtml(trace.maintenance_rule_label_pl)}` : ''}
+            </div>
+        </li>
+    `).join('');
+}
+
+function renderStringList(items, emptyText = 'Brak.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => `<li>${escapeHtml(String(item || ''))}</li>`).join('')}</ul>`;
+}
+
+function renderRiskSummary(risks) {
+    if (!risks || !risks.length) {
+        return '<p class="detail-muted">Brak wyraźnych ryzyk.</p>';
+    }
+    return `<ul class="detail-list">${risks.map(risk => `
+        <li>
+            <strong>${escapeHtml(riskTypeLabel((risk || {}).risk_type || ''))}</strong>
+            <div>${escapeHtml((risk || {}).reason_pl || '')}</div>
+            ${((risk || {}).what_to_watch_for) ? `<div class="detail-muted">Obserwuj: ${escapeHtml((risk || {}).what_to_watch_for || '')}</div>` : ''}
+        </li>
+    `).join('')}</ul>`;
+}
+
+function renderSuggestionItems(items, emptyText = 'Brak sugestii.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => `
+        <li>
+            <strong>${escapeHtml((item || {}).suggestion_type === 'split' ? 'Sugestia rozdzielenia' : 'Sugestia połączenia')}</strong>
+            <div>${escapeHtml((item || {}).reason_pl || '')}</div>
+        </li>
+    `).join('')}</ul>`;
+}
+
+function renderMailboxFactItems(items, emptyText = 'Brak zapisanych faktów.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => `
+        <li>
+            <strong>${escapeHtml(humanizeCode((item || {}).fact_key || (item || {}).entity_scope, 'Fakt'))}</strong>
+            <div>${escapeHtml((item || {}).value || (item || {}).normalized_value || '')}</div>
+            ${((item || {}).source_ref) ? `<div class="detail-muted">Źródło: ${escapeHtml((item || {}).source_ref || '')}</div>` : ''}
+        </li>
+    `).join('')}</ul>`;
+}
+
+function renderMailboxDocumentItems(items, emptyText = 'Brak ostatnich dokumentów.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => {
+        const dk = String((item || {}).document_kind || '').trim().toLowerCase();
+        const kindLabel = dk === 'generic' || !dk ? 'Ogólny' : humanizeCode(dk, dk);
+        return `
+        <li>
+            <strong>${escapeHtml((item || {}).file_name || 'Dokument')}</strong>
+            <div>${escapeHtml((item || {}).summary_text || '')}</div>
+            <div class="detail-muted">
+                ${escapeHtml(kindLabel)}
+                ${((item || {}).updated_at) ? ` | ${escapeHtml(formatDate((item || {}).updated_at || ''))}` : ''}
+            </div>
+        </li>
+    `;
+    }).join('')}</ul>`;
+}
+
+function renderMailboxConflictItems(items, emptyText = 'Brak konfliktów danych w tej części pamięci.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => `
+        <li>
+            <strong>${escapeHtml(humanizeCode((item || {}).fact_key, 'Konflikt'))}</strong>
+            <div>${escapeHtml(((item || {}).values || []).join(' | '))}</div>
+        </li>
+    `).join('')}</ul>`;
+}
+
+function renderMailboxSourceRefs(items, emptyText = 'Brak jawnych odniesień do źródeł.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => {
+        const type = (item || {}).type || 'ref';
+        const typeLabel = mailboxSourceTypeLabel(type);
+        const detail = (item || {}).file_name || (item || {}).source_ref || (item || {}).document_id || (item || {}).event_type || (item || {}).id || '';
+        return `
+        <li>
+            <strong>${escapeHtml(typeLabel)}</strong>
+            <div>${escapeHtml(detail)}</div>
+        </li>
+    `;
+    }).join('')}</ul>`;
+}
+
+function renderMailboxMemorySection(noteOrCase) {
+    const snapshot = (noteOrCase && typeof noteOrCase.case_snapshot === 'object' && noteOrCase.case_snapshot) || {};
+    const keyFacts = (noteOrCase.key_facts && noteOrCase.key_facts.length ? noteOrCase.key_facts : snapshot.key_facts) || [];
+    const latestDocuments = (noteOrCase.latest_documents && noteOrCase.latest_documents.length ? noteOrCase.latest_documents : snapshot.latest_documents) || [];
+    const conflictingFacts = (noteOrCase.conflicting_facts && noteOrCase.conflicting_facts.length ? noteOrCase.conflicting_facts : snapshot.conflicting_facts) || [];
+    const sourceRefs = noteOrCase.source_refs || [];
+    const openQuestions = snapshot.open_questions || [];
+    const customer = (snapshot && typeof snapshot.customer === 'object' && snapshot.customer) || {};
+    const headerBits = [];
+
+    if (snapshot.status) {
+        headerBits.push(`Status migawki: ${snapshot.status}`);
+    }
+    if (customer.name) {
+        headerBits.push(`Klient: ${customer.name}`);
+    }
+    if (snapshot.recommended_next_action) {
+        headerBits.push(`Wskazówka kolejnego kroku (read-only z migawki, nie decyzja formalna): ${snapshot.recommended_next_action}`);
+    }
+
+    const hasDetailsBody = keyFacts.length || latestDocuments.length || conflictingFacts.length || sourceRefs.length
+        || (openQuestions.length > 2);
+
+    if (!headerBits.length && !snapshot.recommended_next_action_reason && !openQuestions.length && !hasDetailsBody) {
+        return '';
+    }
+
+    const reasonLine = snapshot.recommended_next_action_reason
+        ? `<p class="detail-muted">${escapeHtml(snapshot.recommended_next_action_reason)}</p>`
+        : '';
+    const questionsCompact = openQuestions.length
+        ? `<p class="detail-muted">Otwarte pytania: ${escapeHtml(openQuestions.slice(0, 2).join('; '))}${openQuestions.length > 2 ? '…' : ''}</p>`
+        : '';
+
+    const detailsBlock = hasDetailsBody ? `
+        <details class="detail-tech">
+            <summary class="detail-muted">Szczegóły pamięci</summary>
+            <div class="detail-tech-body">
+                ${openQuestions.length > 2 ? `<p class="detail-muted">Wszystkie pytania: ${escapeHtml(openQuestions.join('; '))}</p>` : ''}
+                <p><strong>Kluczowe fakty</strong></p>
+                ${renderMailboxFactItems(keyFacts)}
+                <p><strong>Ostatnie dokumenty</strong></p>
+                ${renderMailboxDocumentItems(latestDocuments)}
+                <p><strong>Konflikty danych (pamięć)</strong></p>
+                ${renderMailboxConflictItems(conflictingFacts)}
+                <p><strong>Źródła pamięci</strong></p>
+                ${renderMailboxSourceRefs(sourceRefs)}
+                ${renderTechnicalDetails('Surowa migawka (JSON)', snapshot)}
+            </div>
+        </details>
+    ` : '';
+
+    return `
+        <section class="detail-section detail-section-intelligence">
+            <h3>Pamięć sprawy</h3>
+            ${headerBits.length ? `<p>${escapeHtml(headerBits.join(' · '))}</p>` : ''}
+            ${reasonLine}
+            ${openQuestions.length <= 2 ? questionsCompact : ''}
+            ${detailsBlock}
+        </section>
+    `;
+}
+
+function renderOperationalTimeline(items) {
+    if (!items || !items.length) {
+        return '<p class="detail-muted">Brak wpisów w dzienniku operacyjnym (zapis pojawi się po kolejnych zdarzeniach systemu).</p>';
+    }
+    return `<ol class="detail-timeline">${items.map(ev => `
+        <li>
+            <div class="timeline-meta">${escapeHtml((ev || {}).occurred_at || '')} · ${escapeHtml((ev || {}).event_type_label || (ev || {}).event_type || '')}</div>
+            <div>${escapeHtml((ev || {}).summary_pl || '')}</div>
+        </li>
+    `).join('')}</ol>`;
+}
+
+function renderAutomationPolicy(policy) {
+    const p = policy || {};
+    const blocks = (p.blocked_automation_reasons || []).join(', ');
+    const lines = [];
+    lines.push(`Projekcja biurka (bez review): ${p.allow_automated_desk_projection ? 'tak' : 'nie'}`);
+    lines.push(`Push zadań v1: ${p.allow_automated_v1_task_push ? 'tak' : 'nie'}`);
+    lines.push(`Odpowiedź do klienta (auto): ${p.allow_automated_client_reply ? 'tak' : 'nie'}`);
+    lines.push(`Kontakt z dostawcą (auto): ${p.allow_automated_supplier_touch ? 'tak' : 'nie'}`);
+    if (blocks) {
+        lines.push(`Powody blokady: ${blocks}`);
+    }
+    return lines.map(l => `<p>${escapeHtml(l)}</p>`).join('');
+}
+
+function renderMissingInfoDetail(noteOrCase) {
+    const checklist = noteOrCase.operator_checklist_pl || [];
+    const summary = noteOrCase.missing_info_summary_pl || '';
+    if (!summary && !checklist.length) {
+        return '<p class="detail-muted">W tej projekcji nie ma opisanych braków informacji na checklistie.</p>';
+    }
+    return `
+        ${summary ? `<p>${escapeHtml(summary)}</p>` : ''}
+        ${checklist.length ? renderStringList(checklist, 'Brak checklisty.') : ''}
+    `;
+}
+
+function canCurrentUserDecideActionProposals() {
+    return ['konrad', 'darek'].includes(String(state.currentUser || '').trim());
+}
+
+function renderActionProposalCard(item) {
+    const it = item || {};
+    const title = String(it.title || it.summary || humanizeCode(it.action_type, 'Propozycja')).trim();
+    const doText = String(it.recommended_operator_action || it.primary_next_action_title_pl || '').trim();
+    const why = String(it.reason || it.primary_next_action_reason_pl || '').trim();
+    const evid = formatEvidenceRefsSummary(it.evidence_refs);
+    const risk = polishRiskLevel(it.risk_level || it.risk_class);
+    const approval = it.requires_approval ? 'Tak' : 'Nie';
+    const policy = polishPolicyStatus(it.policy_status);
+    const status = polishProposalStatus(it.status);
+    const statusRaw = String(it.status || 'proposed').trim();
+    const decisionId = String(it.proposal_id || it.id || '').trim();
+    const canDecide = statusRaw === 'proposed' && decisionId && canCurrentUserDecideActionProposals();
+    const lines = [];
+    lines.push('<p class="guidance-compact"><span class="guidance-badge">Propozycja</span></p>');
+    lines.push(`<p><strong>${escapeHtml(title)}</strong></p>`);
+    if (doText) {
+        lines.push(`<p><span class="detail-muted">Co zrobić:</span> ${escapeHtml(doText)}</p>`);
+    }
+    if (why) {
+        lines.push(`<p><span class="detail-muted">Dlaczego:</span> ${escapeHtml(why)}</p>`);
+    }
+    if (evid) {
+        lines.push(`<p><span class="detail-muted">Dowody:</span> ${escapeHtml(evid)}</p>`);
+    } else {
+        lines.push('<p class="detail-muted">Dowody: brak jawnego odwołania do dowodu w tej projekcji.</p>');
+    }
+    const metaBits = [
+        `Ryzyko: ${risk}`,
+        `Wymaga akceptacji: ${approval}`,
+        `Status polityki: ${policy || '—'}`,
+        `Status: ${status}`,
+    ];
+    lines.push(`<p class="detail-muted">${escapeHtml(metaBits.join(' · '))}</p>`);
+    lines.push(renderTechnicalDetails('Dane techniczne propozycji (JSON)', it));
+    if (canDecide) {
+        lines.push(`
+                    <div class="feedback-grid">
+                        <button type="button" class="btn btn-primary btn-small" data-action-proposal-approve="${escapeHtml(decisionId)}">Akceptuj</button>
+                        <button type="button" class="btn btn-secondary btn-small" data-action-proposal-reject="${escapeHtml(decisionId)}">Odrzuć</button>
+                    </div>
+                `);
+    } else if (statusRaw === 'proposed' && decisionId) {
+        lines.push('<p class="detail-muted">Akceptację lub odrzucenie zapisuje tylko owner. Ta rekomendacja nie wykonuje się automatycznie.</p>');
+    }
+    return `<li>${lines.join('')}</li>`;
+}
+
+function renderActionProposalsSection(caseItem, payload) {
+    const st = proposalSectionState(caseItem, payload);
+    if (st !== 'present') {
+        return sectionStateMessage(
+            st,
+            'Ta projekcja nie zawiera jeszcze sekcji propozycji działań.',
+            'Brak propozycji działań w dostarczonych danych.',
+        );
+    }
+    const proposals = collectActionProposalsForUi(caseItem, payload);
+    return `<ul class="detail-list">${proposals.map(renderActionProposalCard).join('')}</ul>`;
+}
+
+function renderOperatorHistoryInner(executionResults) {
+    const results = Array.isArray(executionResults) ? executionResults : [];
+    if (!results.length) {
+        return '';
+    }
+    return results.map(item => `
+        <li>
+            <strong>${escapeHtml(humanizeCode(item.action_type, 'Działanie'))}</strong>
+            <span class="detail-muted">${escapeHtml(polishExecutionStatus(item.execution_status) || '—')}</span>
+        </li>
+    `).join('');
+}
+
+function renderOperatorHistorySection(caseItem, payload) {
+    const st = executionHistorySectionState(caseItem, payload);
+    if (st !== 'present') {
+        return sectionStateMessage(
+            st,
+            'Ta projekcja nie zawiera jeszcze sekcji historii decyzji operatora.',
+            'Brak zapisanej historii decyzji w dostarczonych danych.',
+        );
+    }
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    const list = (p.execution_results || c.execution_results || []);
+    return `<ul class="detail-list">${renderOperatorHistoryInner(list)}</ul>`;
+}
+
+function gapSummaryText(raw) {
+    if (typeof raw === 'string') {
+        return raw.trim();
+    }
+    if (raw && typeof raw === 'object') {
+        return String(raw.summary || raw.summary_pl || raw.text || '').trim();
+    }
+    return '';
+}
+
+function renderEvidenceCardsInner(list) {
+    const cards = Array.isArray(list) ? list : [];
+    return `<ul class="detail-list">${cards.map(card => {
+        const c = card || {};
+        const title = c.summary || c.evidence_id || 'Dowód';
+        const quote = String(c.quote || c.snippet || c.excerpt || '').trim();
+        const stype = mailboxSourceTypeLabel(c.source_type || '');
+        const ts = c.timestamp || c.occurred_at || '';
+        const conf = c.confidence != null && String(c.confidence).trim() !== ''
+            ? `Pewność: ${String(c.confidence)}`
+            : '';
+        const meta = [stype, c.source_id ? `ID: ${c.source_id}` : '', ts ? formatDate(ts) : '', conf].filter(Boolean).join(' · ');
+        return `
+        <li>
+            <strong>${escapeHtml(title)}</strong>
+            ${quote ? `<div>${escapeHtml(quote)}</div>` : ''}
+            <div class="detail-muted">${escapeHtml(meta || 'Typ źródła nieokreślony')}</div>
+        </li>`;
+    }).join('')}</ul>`;
+}
+
+function renderGapItem(g) {
+    if (typeof g === 'string') {
+        return `<li>${escapeHtml(g.trim())}</li>`;
+    }
+    const o = g && typeof g === 'object' ? g : {};
+    const sum = gapSummaryText(o) || 'Brak opisu';
+    const sev = o.severity ? polishGapSeverity(o.severity) : '';
+    const st = o.status ? polishGapStatus(o.status) : '';
+    const sugg = String(o.suggested_next_action || '').trim();
+    const ev = formatEvidenceRefsSummary(o.evidence_refs);
+    const meta = [];
+    if (sev) {
+        meta.push(`Nasilenie: ${sev}`);
+    }
+    if (st) {
+        meta.push(`Stan: ${st}`);
+    }
+    if (sugg) {
+        meta.push(`Sugerowany krok: ${sugg}`);
+    }
+    if (o.blocking === true) {
+        meta.push('Blokuje dalszy przebieg: tak');
+    }
+    meta.push(ev ? `Dowody: ${ev}` : 'Dowody: brak jawnego odwołania w tej projekcji');
+    return `
+        <li>
+            <strong>${escapeHtml(sum)}</strong>
+            <div class="detail-muted">${escapeHtml(meta.join(' · '))}</div>
+        </li>`;
+}
+
+function renderGapsInner(gaps) {
+    const list = Array.isArray(gaps) ? gaps : [];
+    return `<ul class="detail-list">${list.map(renderGapItem).join('')}</ul>`;
+}
+
+function renderConflictItem(c) {
+    const o = c && typeof c === 'object' ? c : {};
+    const sum = String(o.summary || humanizeCode(o.fact_key, 'Sprzeczność')).trim();
+    const vals = (o.values || []).join(' · ');
+    const sev = o.severity ? polishGapSeverity(o.severity) : '';
+    const st = o.status ? polishGapStatus(o.status) : '';
+    const ev = formatEvidenceRefsSummary(o.evidence_refs);
+    const dec = String(o.operator_decision || o.decision || '').trim();
+    const meta = [];
+    if (vals) {
+        meta.push(`Wartości: ${vals}`);
+    }
+    if (sev) {
+        meta.push(`Nasilenie: ${sev}`);
+    }
+    if (st) {
+        meta.push(`Stan: ${st}`);
+    }
+    meta.push(ev ? `Dowody: ${ev}` : 'Dowody: brak jawnego odwołania w tej projekcji');
+    if (dec) {
+        meta.push(`Decyzja operatora: ${dec}`);
+    }
+    return `
+        <li>
+            <strong>${escapeHtml(sum)}</strong>
+            <div class="detail-muted">${escapeHtml(meta.join(' · '))}</div>
+        </li>`;
+}
+
+function renderConflictsInner(items) {
+    const list = Array.isArray(items) ? items : [];
+    return `<ul class="detail-list">${list.map(renderConflictItem).join('')}</ul>`;
+}
+
+function renderGraphHintsInner(hints) {
+    const list = Array.isArray(hints) ? hints : [];
+    return `<ul class="detail-list">${list.map(h => `<li>${escapeHtml(h.related_title || h.target_title || h.relation_type || 'Powiązanie')}</li>`).join('')}</ul>`;
+}
+
+function renderDownstreamSignalCard(sig) {
+    const s = sig || {};
+    const category = downstreamSignalCategoryLabel(s);
+    const sum = String(s.summary || '').trim();
+    const act = String(s.recommended_operator_action || '').trim();
+    const risk = polishRiskLevel(s.risk_level);
+    const approval = s.requires_approval ? 'Tak' : 'Nie';
+    const policy = polishPolicyStatus(s.policy_status);
+    const status = polishProposalStatus(s.status);
+    const evid = formatEvidenceRefsSummary(s.evidence_refs);
+    const lines = [];
+    lines.push(`<p class="guidance-compact"><span class="guidance-badge">${escapeHtml(category)}</span></p>`);
+    if (sum) {
+        lines.push(`<p><strong>${escapeHtml(sum)}</strong></p>`);
+    }
+    if (act) {
+        lines.push(`<p><span class="detail-muted">Co zrobić:</span> ${escapeHtml(act)}</p>`);
+    }
+    const metaBits = [
+        `Ryzyko: ${risk}`,
+        `Wymaga akceptacji: ${approval}`,
+        policy ? `Status polityki: ${policy}` : '',
+        status ? `Status: ${status}` : '',
+        evid ? `Dowody: ${evid}` : 'Dowody: brak jawnego odwołania w tej projekcji',
+    ].filter(Boolean);
+    lines.push(`<p class="detail-muted">${escapeHtml(metaBits.join(' · '))}</p>`);
+    lines.push(renderTechnicalDetails('Dane techniczne sygnału (JSON)', s));
+    return `<li>${lines.join('')}</li>`;
+}
+
+function renderDownstreamSignalListHtml(signals) {
+    const list = (Array.isArray(signals) ? signals : []).filter(s => s && typeof s === 'object');
+    if (!list.length) {
+        return '';
+    }
+    return `<ul class="detail-list">${list.map(renderDownstreamSignalCard).join('')}</ul>`;
+}
+
+function renderDownstreamSignalSection(title, signals, st, missingMsg, emptyMsg, extraBoundaryHtml = '') {
+    const boundary = '<p class="detail-muted">To jest rekomendacja dla operatora. System nie wykonuje tej akcji automatycznie.</p>';
+    const extra = extraBoundaryHtml ? extraBoundaryHtml : '';
+    const list = Array.isArray(signals) ? signals : [];
+    let bodyHtml;
+    let preview;
+    if (st !== 'present') {
+        preview = st === 'missing' ? projectionSectionMissingPreview() : 'Brak wpisów';
+        bodyHtml = boundary + extra + sectionStateMessage(st, missingMsg, emptyMsg);
+    } else if (!list.length) {
+        preview = 'Brak wpisów';
+        bodyHtml = boundary + extra + `<p class="detail-muted">${escapeHtml(emptyMsg)}</p>`;
+    } else {
+        preview = `${list.length} ${list.length === 1 ? 'sygnał' : 'sygnałów'}`;
+        bodyHtml = boundary + extra + renderDownstreamSignalListHtml(signals);
+    }
+    return renderCollapsibleDetailBlock(title, preview, bodyHtml);
+}
+
+/**
+ * Read-only vNext strip from operational feed (no recompute, no raw mail body).
+ * Fields: context_pack_version, has_blocking_*, badges.* counts, top_conflicts, top_gaps.
+ */
+function renderVNextFeedBadgeStrip(caseItem) {
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    const ver = String(c.context_pack_version || '').trim();
+    const badges = c.badges && typeof c.badges === 'object' ? c.badges : {};
+    const gapN = typeof badges.gaps === 'number' ? badges.gaps : (Array.isArray(c.completeness_gaps) ? c.completeness_gaps.length : 0);
+    const confN = typeof badges.conflicts === 'number' ? badges.conflicts : (Array.isArray(c.conflicting_facts) ? c.conflicting_facts.length : 0);
+    const blockC = Boolean(c.has_blocking_conflicts);
+    const blockG = Boolean(c.has_blocking_gaps);
+    const topsC = Array.isArray(c.top_conflicts) ? c.top_conflicts : [];
+    const topsG = Array.isArray(c.top_gaps) ? c.top_gaps : [];
+
+    const hasVnext = Boolean(ver || blockC || blockG || topsC.length || topsG.length);
+    if (!hasVnext) {
+        return '';
+    }
+
+    const parts = [];
+    if (ver) {
+        parts.push(`<span class="record-badge">${escapeHtml(`Kontekst: ${ver}`)}</span>`);
+    }
+    if (blockC) {
+        parts.push('<span class="record-badge record-badge-risk">Blokujące sprzeczności</span>');
+    }
+    if (blockG) {
+        parts.push('<span class="record-badge record-badge-risk">Blokujące braki</span>');
+    }
+    if (confN > 0) {
+        parts.push(`<span class="record-badge record-badge-risk">Konflikty: ${escapeHtml(String(confN))}</span>`);
+    }
+    if (gapN > 0) {
+        parts.push(`<span class="record-badge record-badge-gap">Braki: ${escapeHtml(String(gapN))}</span>`);
+    }
+
+    const mini = [];
+    topsC.slice(0, 3).forEach((row) => {
+        if (row && typeof row === 'object') {
+            const s = String(row.summary || row.type || '').trim().slice(0, 200);
+            if (s) {
+                mini.push(`<li class="detail-muted">${escapeHtml(s)}</li>`);
+            }
+        }
+    });
+    topsG.slice(0, 3).forEach((row) => {
+        if (row && typeof row === 'object') {
+            const s = String(row.summary || row.type || '').trim().slice(0, 200);
+            if (s) {
+                mini.push(`<li class="detail-muted">${escapeHtml(s)}</li>`);
+            }
+        }
+    });
+
+    const strip = parts.length ? `<div class="record-badges vnext-feed-badges">${parts.join('')}</div>` : '';
+    const list = mini.length ? `<ul class="detail-list vnext-top-signals">${mini.join('')}</ul>` : '';
+    return `<div class="vnext-context-micro"><p class="detail-muted">Wersja kontekstu (read-only z feedu Node B — bez przeliczania w UI).</p>${strip}${list}</div>`;
+}
+
+function renderCieploEngagementBlock(engagementBundle) {
+    const bundle = engagementBundle && typeof engagementBundle === 'object' ? engagementBundle : null;
+    if (!bundle) {
+        return '<div class="vnext-context-micro"><p class="detail-muted">Powiązane zlecenie Cieplo: brak wpisu w rejestrze korelacji (P0).</p></div>';
+    }
+    const links = Array.isArray(bundle.links) ? bundle.links : [];
+    const workflowLink = links.find(l => l && l.link_type === 'cieplo_workflow');
+    const workflowId = workflowLink ? String(workflowLink.target_id || '') : '';
+    if (!workflowId) {
+        return '<div class="vnext-context-micro"><p class="detail-muted">Ten sam klient może mieć zlecenie Cieplo — jeszcze nie powiązane automatycznie.</p></div>';
+    }
+    return `<div class="vnext-context-micro"><p><strong>Zlecenie Cieplo</strong> <span class="record-badge">${escapeHtml(workflowId)}</span></p><p class="detail-muted">Zaangażowanie: ${escapeHtml(String(bundle.engagement_id || ''))}</p></div>`;
+}
+
+function renderCaseProjectionExtras(caseItem, payload) {
+    const c = caseItem && typeof caseItem === 'object' ? caseItem : {};
+    const p = payload && typeof payload === 'object' ? payload : {};
+
+    const evSt = sectionState(c, 'evidence_cards');
+    const evidence = c.evidence_cards || [];
+    const evPreview = evSt === 'missing' ? projectionSectionMissingPreview() : evSt !== 'present' ? 'Brak wpisów' : (evidence.length ? `${evidence.length} ${evidence.length === 1 ? 'dowód' : 'dowodów'}` : 'Brak dowodów');
+    const evBody = evSt !== 'present'
+        ? sectionStateMessage(evSt, 'Ta projekcja nie zawiera jeszcze sekcji dowodów.', 'Brak dowodów w dostarczonych danych.')
+        : renderEvidenceCardsInner(evidence);
+
+    const gapsSt = sectionState(c, 'completeness_gaps');
+    const gaps = c.completeness_gaps || [];
+    const gapsPreview = gapsSt === 'missing' ? projectionSectionMissingPreview() : gapsSt !== 'present' ? 'Brak wpisów' : (gaps.length ? `${gaps.length} ${gaps.length === 1 ? 'brak' : 'braków'}` : 'Brak braków');
+    const gapsBody = gapsSt !== 'present'
+        ? sectionStateMessage(gapsSt, 'Ta projekcja nie zawiera jeszcze sekcji braków danych.', 'Brak widocznych braków danych w dostarczonej liście.')
+        : renderGapsInner(gaps);
+
+    const cfSt = conflictsSectionState(c);
+    const conflicts = c.operator_visible_conflicts || c.conflicting_facts || [];
+    const cfPreview = cfSt === 'missing' ? projectionSectionMissingPreview() : cfSt !== 'present' ? 'Brak wpisów' : (conflicts.length ? `${conflicts.length} ${conflicts.length === 1 ? 'sprzeczność' : 'sprzeczności'}` : 'Brak sprzeczności');
+    const cfBody = cfSt !== 'present'
+        ? sectionStateMessage(cfSt, 'Ta projekcja nie zawiera jeszcze sekcji sprzeczności.', 'Brak zidentyfikowanych sprzeczności w dostarczonych danych.')
+        : renderConflictsInner(conflicts);
+
+    const ghSt = sectionState(c, 'graph_hints');
+    const hints = c.graph_hints || [];
+    const ghPreview = ghSt === 'missing' ? projectionSectionMissingPreview() : ghSt !== 'present' ? 'Brak wpisów' : (hints.length ? `${hints.length} ${hints.length === 1 ? 'powiązanie' : 'powiązań'}` : 'Brak wskazówek');
+    const ghBody = ghSt !== 'present'
+        ? sectionStateMessage(ghSt, 'Ta projekcja nie zawiera jeszcze sekcji powiązań.', 'Brak wskazówek powiązań w dostarczonych danych.')
+        : renderGraphHintsInner(hints);
+
+    const apSt = proposalSectionState(c, p);
+    const apList = collectActionProposalsForUi(c, p);
+    const apPreview = apSt === 'missing' ? projectionSectionMissingPreview() : apSt === 'empty' ? 'Brak propozycji' : `${apList.length} ${apList.length === 1 ? 'propozycja' : 'propozycji'}`;
+    const apBody = renderActionProposalsSection(c, p);
+
+    const histSt = executionHistorySectionState(c, p);
+    const histPayloadList = (p.execution_results || c.execution_results || []);
+    const histPreview = histSt === 'missing' ? projectionSectionMissingPreview() : histSt === 'empty' ? 'Brak historii' : `${Array.isArray(histPayloadList) ? histPayloadList.length : 0} wpisów`;
+    const histBody = renderOperatorHistorySection(c, p);
+
+    const svcSt = sectionState(c, 'service_signals');
+    const mktSt = sectionState(c, 'marketing_signals');
+
+    return `
+            ${renderCollapsibleDetailBlockIfPresent('Dowody', evSt, evPreview, evBody)}
+            ${renderCollapsibleDetailBlockIfPresent('Braki danych', gapsSt, gapsPreview, gapsBody)}
+            ${renderCollapsibleDetailBlockIfPresent('Sprzeczności', cfSt, cfPreview, cfBody)}
+            ${renderCollapsibleDetailBlockIfPresent('Wskazówki powiązań', ghSt, ghPreview, ghBody)}
+            ${renderCollapsibleDetailBlockIfPresent('Propozycje działań', apSt, apPreview, apBody)}
+            ${svcSt === 'present' ? renderDownstreamSignalSection('Sygnały serwisowe', c.service_signals || [], svcSt, '', '', '') : ''}
+            ${mktSt === 'present' ? renderDownstreamSignalSection('Sygnały marketingowe', c.marketing_signals || [], mktSt, '', '', '<p class="detail-muted">Sygnał marketingowy wymaga decyzji operatora i sprawdzenia zgody przed publikacją.</p>') : ''}
+            ${renderCollapsibleDetailBlockIfPresent('Historia decyzji operatora', histSt, histPreview, histBody)}
+    `;
+}
+
+function renderCalendarBlock(calendar = {}) {
+    const events = calendar.events || [];
+    const riskCode = calendar.calendar_risk || 'no_calendar_action_needed';
+    return `
+        <p><strong>Ryzyko kalendarza:</strong> ${escapeHtml(calendarRiskLabelPl(riskCode))}</p>
+        ${events.length ? `<ul class="detail-list">${events.map(ev => `<li><strong>${escapeHtml(ev.summary || 'Wydarzenie')}</strong><span>${formatDate(ev.start_at)} - ${escapeHtml(ev.location || '')}</span></li>`).join('')}</ul>` : '<p class="detail-muted">Brak powiązanych wydarzeń.</p>'}
+    `;
+}
+
+function renderDocumentIntelligenceBlock(block = {}) {
+    const docs = block.important_documents || [];
+    const conflicts = block.document_conflicts || [];
+    if (!docs.length && !conflicts.length) {
+        return '<p class="detail-muted">Brak wyników Document Intelligence.</p>';
+    }
+    return `
+        ${docs.length ? `<ul class="detail-list">${docs.map(doc => {
+        const dtype = String(doc.document_type || '').trim().toLowerCase();
+        const typeLabel = dtype === 'unknown' || !dtype ? 'nieznany typ' : humanizeCode(dtype, dtype);
+        return `<li><strong>${escapeHtml(doc.filename || doc.document_id || 'dokument')}</strong><span>${escapeHtml(typeLabel)} / ${Math.round(Number(doc.document_type_confidence || 0) * 100)}%</span>${(doc.extracted_fields || []).slice(0, 4).map(field => `<p class="detail-muted">${escapeHtml(field.field_name)}: ${escapeHtml(field.field_value)}</p>`).join('')}</li>`;
+    }).join('')}</ul>` : ''}
+        ${conflicts.length ? `<p class="detail-muted">Konflikty: ${escapeHtml(conflicts.map(c => c.field_name || c.conflict_type).join(', '))}</p>` : ''}
+    `;
+}
+
+function renderDecisionViewSection(dv) {
+    if (!dv || typeof dv !== 'object') {
+        return '';
+    }
+    const renderDecisionViewKv = (items) => items
+        .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+        .map(([label, value]) => `<span class="pill">${escapeHtml(label)}: ${escapeHtml(String(value))}</span>`)
+        .join(' ');
+    const renderDecisionViewCards = (title, cards, mapper) => {
+        const rows = Array.isArray(cards) ? cards.slice(0, 6).filter(Boolean) : [];
+        if (!rows.length) {
+            return '';
+        }
+        return `<div class="decision-view-cardset"><strong>${escapeHtml(title)}</strong><ul class="detail-list">${rows.map(mapper).join('')}</ul></div>`;
+    };
+    const cop = dv.collapsed_operator_pl && typeof dv.collapsed_operator_pl === 'object' ? dv.collapsed_operator_pl : null;
+    const headline = escapeHtml(
+        String(dv.headline_co_pl || '').trim()
+        || String(cop && cop.essence_pl ? cop.essence_pl : '').trim()
+        || String(dv.decision_summary && dv.decision_summary.essence_pl ? dv.decision_summary.essence_pl : '').trim(),
+    );
+    const ribbonSituation = cop && String(cop.situation_vs_decision_hint_pl || '').trim()
+        ? escapeHtml(String(cop.situation_vs_decision_hint_pl).trim()) : '';
+    const ribbonExpand = cop && String(cop.expand_hint_pl || '').trim()
+        ? escapeHtml(String(cop.expand_hint_pl).trim()) : '';
+    const collapseDetails = !!(cop && cop.details_collapsed_by_default === true);
+
+    const change = escapeHtml(dv.change_summary_pl || dv.what_changed_since_pl || '');
+    const missing = escapeHtml(dv.missing_summary_pl || '');
+    const risk = escapeHtml(dv.risk_summary_pl || '');
+    const proposal = escapeHtml(dv.proposal_summary_pl || '');
+    const why = escapeHtml(dv.why_pl || '');
+    const policy = escapeHtml(dv.policy_status_pl || '');
+    const pb = escapeHtml(dv.playbook_instruction_pl || '');
+    const prim = dv.primary_button || {};
+    const sec = Array.isArray(dv.secondary_buttons) ? dv.secondary_buttons : [];
+    const decision = dv.decision && typeof dv.decision === 'object' ? dv.decision : {};
+    const policyBlock = dv.policy && typeof dv.policy === 'object' ? dv.policy : {};
+    const decisionPills = renderDecisionViewKv([
+        ['topic', decision.topic],
+        ['typ', decision.case_type],
+        ['priorytet', decision.priority],
+        ['SLA', decision.sla_risk],
+        ['tryb (DecisionCandidate)', decision.recommended_mode],
+    ]);
+    const policyPills = renderDecisionViewKv([
+        ['status', policyBlock.status || policy],
+        ['risk', policyBlock.risk_class],
+        ['dry-run', policyBlock.dry_run_only ? 'tak' : ''],
+        ['approval', policyBlock.requires_human_approval ? 'wymagany' : ''],
+    ]);
+    const failedRules = Array.isArray(policyBlock.failed_rules) ? policyBlock.failed_rules.filter(Boolean).slice(0, 5) : [];
+    const warnings = Array.isArray(policyBlock.warnings) ? policyBlock.warnings.filter(Boolean).slice(0, 5) : [];
+    const mapActionProposalRow = (a) => {
+        const aObj = a && typeof a === 'object' ? a : {};
+        const typeLine = escapeHtml(String(
+            aObj.action_type_label_pl
+            || (aObj.action_type ? humanizeCode(aObj.action_type, aObj.action_type) : '')
+            || aObj.proposal_id
+            || 'propozycja',
+        ));
+        const statusSpan = escapeHtml([aObj.status, aObj.action_mode, aObj.blocked_reason].filter(Boolean).join(' / '));
+        let policyMuted = '';
+        if (aObj.allowed_by_policy === false) {
+            const blocked = aObj.reason_if_blocked_pl
+                ? escapeHtml(String(aObj.reason_if_blocked_pl))
+                : 'Tylko podgląd — brak zgody policy dla tej propozycji w tej projekcji.';
+            policyMuted = `<p class="detail-muted">${blocked}</p>`;
+        }
+        const sum = aObj.summary_pl ? `<p class="detail-muted">${escapeHtml(aObj.summary_pl)}</p>` : '';
+        return `<li><strong>${typeLine}</strong><span>${statusSpan}</span>${sum}${policyMuted}</li>`;
+    };
+    const actionCards = renderDecisionViewCards('Propozycje działań v2 (read-only)', dv.action_proposals, mapActionProposalRow);
+    const evidenceCards = renderDecisionViewCards('Evidence', dv.evidence_cards, (e) => `<li><strong>${escapeHtml(e.title_pl || 'evidence')}</strong><span>${escapeHtml([e.content_pl, e.source_id].filter(Boolean).join(' / '))}</span></li>`);
+    const missingCards = renderDecisionViewCards('Missing Info', dv.missing_info_cards, (m) => `<li><strong>${escapeHtml(m.title_pl || 'brak')}</strong><span>${escapeHtml(m.content_pl || '')}</span></li>`);
+    const riskCards = renderDecisionViewCards('Conflicts / Risks', dv.risk_cards, (r) => `<li><strong>${escapeHtml(r.title_pl || 'ryzyko')}</strong><span>${escapeHtml(r.content_pl || '')}</span></li>`);
+    const primId = escapeHtml(String(prim.id || 'review'));
+    const primLab = escapeHtml(String(prim.label_pl || 'Przejrzyj'));
+    let buttons = `<button type="button" class="btn btn-primary btn-small" data-decision-view-action="${primId}">${primLab}</button>`;
+    sec.slice(0, 3).forEach(b => {
+        if (!b || !b.id) {
+            return;
+        }
+        buttons += ` <button type="button" class="btn btn-ghost btn-small" data-decision-view-action="${escapeHtml(String(b.id))}">${escapeHtml(String(b.label_pl || b.id))}</button>`;
+    });
+    const dcId = escapeHtml(String(dv.decision_candidate_id || '—'));
+    const pdId = escapeHtml(String(dv.policy_decision_id || '—'));
+    const apList = Array.isArray(dv.action_proposals) ? dv.action_proposals.filter(Boolean) : [];
+    const hasInnerText = !!(change || missing || risk || proposal || why || policy || pb || (dv.decision_candidate_id || '').trim());
+    const hasCards = !!(apList.length
+        || (Array.isArray(dv.evidence_cards) && dv.evidence_cards.length)
+        || (Array.isArray(dv.missing_info_cards) && dv.missing_info_cards.length)
+        || (Array.isArray(dv.risk_cards) && dv.risk_cards.length));
+    const hasBody = !!(headline || ribbonSituation || ribbonExpand || hasInnerText || hasCards);
+    if (!hasBody) {
+        return '';
+    }
+    const detailPreviewParts = [];
+    if (cop && cop.topic) {
+        detailPreviewParts.push(String(cop.topic));
+    }
+    if (cop && cop.priority) {
+        detailPreviewParts.push(`priorytet: ${cop.priority}`);
+    }
+    if (apList.length) {
+        detailPreviewParts.push(`${apList.length}× v2`);
+    }
+    const detailPreview = detailPreviewParts.length ? detailPreviewParts.join(' · ') : 'Szczegóły projekcji';
+
+    const detailsInner = `
+                ${change ? `<p><strong>Co się zmieniło:</strong> ${change}</p>` : ''}
+                ${missing ? `<p><strong>Czego brakuje:</strong> ${missing}</p>` : ''}
+                ${risk ? `<p><strong>Ryzyko:</strong> ${risk}</p>` : ''}
+                ${proposal ? `<p><strong>Propozycje (read-only, z Node B):</strong> ${proposal}</p>` : ''}
+                ${why ? `<p><strong>Dlaczego:</strong> ${why}</p>` : ''}
+                ${policy ? `<p><strong>Status policy (z projekcji):</strong> ${policy}</p>` : ''}
+                ${pb ? `<p><strong>Instrukcja playbook:</strong> ${pb}</p>` : ''}
+                <p class="detail-muted">DecisionCandidate: <code>${dcId}</code> · PolicyDecision: <code>${pdId}</code></p>
+                ${decisionPills ? `<p class="detail-muted">${decisionPills}</p>` : ''}
+                ${policyPills ? `<p><strong>Policy (payload):</strong> ${policyPills}</p>` : ''}
+                ${failedRules.length ? `<p><strong>Failed rules:</strong> ${escapeHtml(failedRules.join(', '))}</p>` : ''}
+                ${warnings.length ? `<p><strong>Warnings:</strong> ${escapeHtml(warnings.join(', '))}</p>` : ''}
+                ${actionCards}
+                ${evidenceCards}
+                ${missingCards}
+                ${riskCards}`;
+    const detailsBlock = collapseDetails
+        ? renderCollapsibleDetailBlock('Szczegóły projekcji decyzyjnej', detailPreview, detailsInner, { open: false })
+        : detailsInner;
+
+    return `
+            <section class="detail-section detail-section-intelligence decision-view-mvp">
+                <h3>Blok decyzyjny (projekcja Node B)</h3>
+                <p class="detail-muted">Read-only — zapis decyzji odbywa się przez istniejące ścieżki operatora / kartki / bridge (nie ten panel).</p>
+                ${ribbonSituation ? `<p class="detail-muted decision-view-ribbon">${ribbonSituation}</p>` : ''}
+                ${ribbonExpand ? `<p class="detail-muted decision-view-ribbon">${ribbonExpand}</p>` : ''}
+                ${headline ? `<p><strong>Co to za sprawa:</strong> ${headline}</p>` : ''}
+                ${detailsBlock}
+                <div class="decision-view-actions">${buttons}</div>
+            </section>`;
+}
+
+function renderSkrzatItems(items, emptyText) {
+    const rows = Array.isArray(items) ? items.filter(Boolean).slice(0, 6) : [];
+    if (!rows.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${rows.map(item => {
+        const obj = item && typeof item === 'object' ? item : {};
+        const title = String(obj.title || obj.fact_key || obj.gap_key || obj.conflict_key || obj.move_key || obj.source_id || item || 'pozycja');
+        const body = String(obj.summary || obj.description || obj.value || obj.reason || obj.warning || obj.source_type || '');
+        const meta = [obj.source_id, obj.evidence_ref, obj.status, obj.severity].filter(Boolean).join(' / ');
+        return `<li><strong>${escapeHtml(title)}</strong>${body ? `<span>${escapeHtml(body)}</span>` : ''}${meta ? `<p class="detail-muted">${escapeHtml(meta)}</p>` : ''}</li>`;
+    }).join('')}</ul>`;
+}
+
+function renderSkrzatPanel(caseItem, payload) {
+    const caseId = String(caseItem.case_id || payload.case_id || '').trim();
+    if (!caseId) {
+        return '';
+    }
+    const answer = state.skrzat.answers[caseId] || null;
+    const loading = state.skrzat.loadingCaseId === caseId;
+    const error = state.skrzat.errors[caseId] || '';
+    const evidence = answer && Array.isArray(answer.evidence) ? answer.evidence : [];
+    const gaps = answer && Array.isArray(answer.gaps) ? answer.gaps : [];
+    const conflicts = answer && Array.isArray(answer.conflicts) ? answer.conflicts : [];
+    const warnings = answer && Array.isArray(answer.warnings) ? answer.warnings : [];
+    const moves = answer && Array.isArray(answer.candidate_moves) ? answer.candidate_moves : [];
+    const schema = answer && answer.schema_version ? String(answer.schema_version) : 'conversation_answer_envelope.v1';
+    const audit = answer && answer.context_audit && typeof answer.context_audit === 'object' ? answer.context_audit : null;
+    const metrics = answer && answer.quality_metrics && typeof answer.quality_metrics === 'object' ? answer.quality_metrics : null;
+    const auditSummary = audit
+        ? `${String(audit.stage_name || 'skrzat_copilot')} · ${String(audit.answer_mode || '?')} · ${String(audit.parse_status || '?')}`
+        : '';
+    const coverage = metrics && metrics.skrzat_evidence_coverage_rate != null
+        ? String(metrics.skrzat_evidence_coverage_rate)
+        : '';
+    return `
+        <section class="detail-section detail-section-intelligence skrzat-panel">
+            <h3>Zapytaj asystenta (podgląd)</h3>
+            <p class="detail-muted">Odpowiedź z pamięci sprawy (Node B). Ten panel nie wysyła maili ani nie wykonuje akcji w Twoim imieniu.</p>
+            <form data-skrzat-form="${escapeHtml(caseId)}">
+                <div class="form-row">
+                    <label for="skrzat-question-${escapeHtml(caseId)}">Pytanie o sprawę</label>
+                    <textarea id="skrzat-question-${escapeHtml(caseId)}" name="question" rows="3" placeholder="Zapytaj o braki, konflikty, dowody albo następny bezpieczny ruch" ${loading ? 'disabled' : ''}></textarea>
+                </div>
+                <div class="form-row">
+                    <label for="skrzat-mode-${escapeHtml(caseId)}">Tryb</label>
+                    <select id="skrzat-mode-${escapeHtml(caseId)}" name="mode" ${loading ? 'disabled' : ''}>
+                        <option value="ask">Ask</option>
+                        <option value="investigate">Investigate</option>
+                        <option value="case_copilot">Case Copilot</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary btn-small" data-skrzat-ask="${escapeHtml(caseId)}" ${loading ? 'disabled' : ''}>
+                    ${loading ? 'Pytam…' : 'Zapytaj Skrzata'}
+                </button>
+            </form>
+            ${error ? `<p class="error-inline" role="alert">${escapeHtml(error)}</p>` : ''}
+            ${answer ? `
+                <div class="detail-tech-body">
+                    <p class="detail-muted">${escapeHtml(schema)} · read_only=${answer.read_only === true ? 'true' : 'false'} · action_allowed=${answer.action_allowed === true ? 'true' : 'false'}</p>
+                    <p><strong>Odpowiedź:</strong> ${escapeHtml(answer.answer_text || 'Brak odpowiedzi.')}</p>
+                    <details class="detail-tech detail-collapsible" open>
+                        <summary>Dowody, braki i konflikty</summary>
+                        <div class="detail-tech-body">
+                            <h4>Dowody</h4>
+                            ${renderSkrzatItems(evidence, 'Brak jawnych dowodów w odpowiedzi.')}
+                            <h4>Braki</h4>
+                            ${renderSkrzatItems(gaps, 'Brak zgłoszonych braków.')}
+                            <h4>Konflikty</h4>
+                            ${renderSkrzatItems(conflicts, 'Brak zgłoszonych konfliktów.')}
+                            <h4>Ostrzeżenia</h4>
+                            ${renderSkrzatItems(warnings, 'Brak ostrzeżeń.')}
+                            <h4>Możliwe ruchy</h4>
+                            ${renderSkrzatItems(moves, 'Brak sugerowanych ruchów.')}
+                        </div>
+                    </details>
+                    ${audit ? `
+                    <details class="ds-tech-tier-2 detail-tech">
+                        <summary class="ds-tech-tier-summary"><span class="ds-tech-plus" aria-hidden="true">+</span> Kontekst LLM (audit)</summary>
+                        <div class="ds-tech-tier-body ds-tech-tier-body--scroll">
+                            <p class="detail-muted">${escapeHtml(auditSummary)}${coverage ? ` · coverage=${escapeHtml(coverage)}` : ''}</p>
+                            <pre class="detail-pre">${escapeHtml(JSON.stringify(audit, null, 2))}</pre>
+                        </div>
+                    </details>
+                    ` : ''}
+                </div>
+            ` : '<p class="detail-muted">Zadaj pytanie, żeby zobaczyć odpowiedź z dowodami, brakami i konfliktami.</p>'}
+        </section>
+    `;
+}
+
+async function askSkrzat(caseId, form) {
+    const cid = String(caseId || '').trim();
+    const base = nodeBApiBase();
+    if (!cid) {
+        return;
+    }
+    if (!base) {
+        state.skrzat.errors[cid] = 'Brak konfiguracji Node B API base dla Skrzata.';
+        renderDetailPanel();
+        return;
+    }
+    const formData = new FormData(form);
+    const question = String(formData.get('question') || '').trim();
+    const mode = String(formData.get('mode') || 'ask').trim() || 'ask';
+    if (!question) {
+        state.skrzat.errors[cid] = 'Wpisz pytanie do Skrzata.';
+        renderDetailPanel();
+        return;
+    }
+    state.skrzat.loadingCaseId = cid;
+    state.skrzat.errors[cid] = '';
+    renderDetailPanel();
+    try {
+        const url = `${base}/cases/${encodeURIComponent(cid)}/skrzat/ask`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ question, mode, query_text: question }),
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+            throw new Error(body && (body.detail || body.message) ? String(body.detail || body.message) : `Node B HTTP ${response.status}`);
+        }
+        if (!body || body.schema_version !== 'conversation_answer_envelope.v1') {
+            throw new Error('Nieprawidłowy envelope odpowiedzi Skrzata.');
+        }
+        state.skrzat.answers[cid] = body;
+        showToast('Skrzat odpowiedział.');
+    } catch (error) {
+        state.skrzat.errors[cid] = error && error.message ? error.message : 'Nie udało się zapytać Skrzata.';
+    } finally {
+        state.skrzat.loadingCaseId = '';
+        renderDetailPanel();
+    }
+}
+
+function renderDetailPanel() {
+    const panel = document.getElementById('detail-panel');
+    if (!state.detail) {
+        setDetailPanelChromeOpen(false);
+        panel.innerHTML = `
+            <div class="detail-empty">
+                <h2>Panel szczegółów</h2>
+                <p>Otwórz kartkę, sprawę albo przebieg kohorty, aby zobaczyć źródła, payload read-only i historię zmian.</p>
+            </div>
+        `;
+        return;
+    }
+
+    setDetailPanelChromeOpen(true);
+
+    if (state.detail.type === 'detail_loading') {
+        const dm = state.detail.mode;
+        const kind = dm === 'note' ? 'kartki' : 'sprawy';
+        panel.innerHTML = `
+            <div class="detail-shell detail-shell--loading">
+                <div class="detail-header">
+                    <div>
+                        <p class="eyebrow">Wczytywanie</p>
+                        <h2 tabindex="-1" data-detail-focus-root>Wczytywanie ${kind}…</h2>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
+                </div>
+                <div class="detail-skeleton" role="progressbar" aria-busy="true" aria-label="Trwa wczytywanie szczegółów">
+                    <div class="detail-skeleton-line"></div>
+                    <div class="detail-skeleton-line detail-skeleton-line--short"></div>
+                    <div class="detail-skeleton-line"></div>
+                </div>
+            </div>
+        `;
+        scheduleDetailPanelFocus();
+        return;
+    }
+
+    if (state.detail.type === 'detail_error') {
+        const dm = state.detail.mode;
+        const rid = String(state.detail.id || '').trim();
+        const msg = String(state.detail.message || 'Wystąpił błąd.');
+        const st = Number(state.detail.httpStatus || 0);
+        const isNote404 = dm === 'note' && st === 404;
+        panel.innerHTML = `
+            <div class="detail-shell detail-shell--error">
+                <div class="detail-header">
+                    <div>
+                        <p class="eyebrow">Błąd wczytania</p>
+                        <h2 tabindex="-1" data-detail-focus-root>${dm === 'note' ? 'Nie udało się wczytać kartki' : 'Nie udało się wczytać sprawy'}</h2>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
+                </div>
+                <p class="error-inline" role="alert">${escapeHtml(msg)}</p>
+                <div class="detail-error-actions">
+                    <button type="button" class="btn btn-primary btn-small" data-retry-detail="${escapeHtml(dm)}" data-retry-id="${escapeHtml(rid)}">Spróbuj ponownie</button>
+                    ${isNote404 ? '<button type="button" class="btn btn-secondary btn-small" data-refresh-operational-feed="1">Odśwież dane</button>' : ''}
+                </div>
+            </div>
+        `;
+        scheduleDetailPanelFocus();
+        return;
+    }
+
+    if (state.detail.type === 'cohort_run') {
+        const pack = state.detail.payload || {};
+        const runId = String(pack.run_id || '').trim();
+        const loading = !!pack.loading;
+        const err = String(pack.error || '').trim();
+        const run = pack.run && typeof pack.run === 'object' ? pack.run : null;
+        const jsonPreview = run
+            ? escapeHtml(JSON.stringify(run, null, 2).slice(0, 24000))
+            : '';
+        panel.innerHTML = `
+            <div class="detail-shell">
+                <div class="detail-header">
+                    <div>
+                        <p class="eyebrow">Kohorta (read-only)</p>
+                        <h2>${escapeHtml(runId || 'Przebieg kohorty')}</h2>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
+                </div>
+                <p class="detail-muted feed-detail-banner">Projekcja bounded cohort zapisana na Node A — panel nie wykonuje akcji ani nie zmienia pamięci skrzynki.</p>
+                ${loading ? '<p class="detail-muted" role="status">Ładowanie szczegółów…</p>' : ''}
+                ${err ? `<p class="error-inline" role="alert">${escapeHtml(err)}</p>` : ''}
+                ${!loading && run ? `
+                    <section class="detail-section">
+                        <h3>Podsumowanie</h3>
+                        <p><strong>Wersja schematu:</strong> ${escapeHtml(String(run.schema_version || '—'))}</p>
+                        <p><strong>Zapisano:</strong> ${escapeHtml(formatDate(run.generated_at || run.projected_at))}</p>
+                    </section>
+                    <details class="detail-tech detail-collapsible">
+                        <summary>Pełny JSON przebiegu (ograniczony podgląd)</summary>
+                        <pre class="detail-pre" tabindex="0">${jsonPreview}</pre>
+                    </details>
+                ` : ''}
+            </div>
+        `;
+        return;
+    }
+
+    if (state.detail.type === 'note') {
+        const payload = state.detail.payload;
+        const note = payload.note || {};
+        const caseItem = payload.case || null;
+        const whySee = String(payload.why_you_see_it || note.why_on_desk || '').trim();
+        const noteTech = buildDetailTechBundle({
+            feedBanner: state.detail.source === 'operational_feed'
+                ? '<p class="detail-muted">Podgląd kartki z ostatniego zrzutu danych AI.</p>'
+                : '<p class="detail-muted">Odczyt z magazynu kartek.</p>',
+            caseItem: note,
+            payload,
+            signals: payload.signals || [],
+            traces: payload.decision_traces || [],
+        });
+        panel.innerHTML = `
+            <div class="detail-shell">
+                <div class="detail-header">
+                    <div>
+                        <p class="eyebrow">Kartka</p>
+                        <h2 tabindex="-1" data-detail-focus-root>${escapeHtml(note.title || 'Kartka AI')}</h2>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
+                </div>
+
+                ${renderOperatorHero(note)}
+
+                ${renderNoteFeedbackBlock(note)}
+
+                ${renderGuidanceSection(note)}
+
+                ${whySee ? `
+                <section class="detail-section">
+                    <h3>Dlaczego to widzę</h3>
+                    <p>${escapeHtml(whySee)}</p>
+                    <div class="detail-muted">${escapeHtml(daszekLabel(note.presence_mode))} • ${escapeHtml(daszekLifecycle(note.lifecycle_state))}</div>
+                </section>` : ''}
+
+                ${renderDetailSectionIfContent('Brakujące informacje', renderMissingInfoDetail(note))}
+                ${note.risk_summary_pl || (note.risks || []).length ? renderDetailSectionIfContent('Ryzyka', `${note.risk_summary_pl ? `<p>${escapeHtml(note.risk_summary_pl)}</p>` : ''}${renderRiskSummary(note.risks || [])}`) : ''}
+                ${note.attachment_summary_pl ? `
+                <section class="detail-section detail-section-intelligence">
+                    <h3>Załączniki</h3>
+                    <p>${escapeHtml(note.attachment_summary_pl)}</p>
+                </section>` : ''}
+                ${note.thread_summary_pl ? `
+                <section class="detail-section detail-section-intelligence">
+                    <h3>Pamięć rozmowy</h3>
+                    <p>${escapeHtml(note.thread_summary_pl)}</p>
+                </section>` : ''}
+
+                <section class="detail-section">
+                    <h3>Powiązana sprawa</h3>
+                    ${caseItem ? `<button type="button" class="link-button" data-open-case="${escapeHtml(caseItem.case_id)}">${escapeHtml(caseItem.title || 'Otwórz sprawę')}</button>` : '<p class="detail-muted">Kartka nie jest jeszcze powiązana ze sprawą.</p>'}
+                </section>
+
+                ${noteTech}
+            </div>
+        `;
+        scheduleDetailPanelFocus();
+        return;
+    }
+
+    const payload = state.detail.payload;
+    const caseItem = payload.case || {};
+    const openNoteId = firstNonEmpty(caseItem.open_desk_note_id, payload.open_desk_note_id);
+    const stateLabel = caseItem.current_state_label || caseStateLabel(caseItem.current_state);
+    const showState = stateLabel && !/^bez stanu$/i.test(String(stateLabel).trim());
+    const caseTech = buildDetailTechBundle({
+        feedBanner: state.detail.source === 'operational_feed'
+            ? '<p class="detail-muted">Podgląd sprawy z ostatniego zrzutu danych AI.</p>'
+            : '<p class="detail-muted">Odczyt z magazynu spraw.</p>',
+        decisionView: payload.decision_view || {},
+        caseItem,
+        payload,
+        signals: payload.signals || [],
+        traces: payload.decision_traces || [],
+        skrzatCaseId: String(caseItem.case_id || '').trim(),
+    });
+    const calendarHtml = renderCalendarBlock(caseItem.calendar || {});
+    const docHtml = renderDocumentIntelligenceBlock(caseItem.document_intelligence || {});
+    const timeline = payload.operational_timeline || [];
+    panel.innerHTML = `
+        <div class="detail-shell">
+            <div class="detail-header">
+                <div>
+                    <p class="eyebrow">Sprawa</p>
+                    <h2 tabindex="-1" data-detail-focus-root>${escapeHtml(caseItem.title || 'Sprawa operacyjna')}</h2>
+                </div>
+                <div class="detail-header-actions">
+                    ${openNoteId ? `<button type="button" class="btn btn-secondary btn-small" data-open-note="${escapeHtml(openNoteId)}" aria-label="Otwórz kartkę ${escapeHtml(limitText(openNoteId, 56))}">Otwórz kartkę</button>` : ''}
+                    ${caseItem.case_id ? (isCaseArchived(caseItem.case_id)
+            ? `<button type="button" class="btn btn-secondary btn-small" data-unarchive-case="${escapeHtml(caseItem.case_id)}">Przywróć z archiwum</button>`
+            : `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(caseItem.case_id)}" title="Ukryj sprawę z aktywnej listy">Archiwizuj</button>`) : '<span class="detail-muted" title="Brak powiązanej sprawy w magazynie">Archiwizacja niedostępna</span>'}
+                    <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
+                </div>
+            </div>
+
+            ${renderOperatorHero(caseItem)}
+
+            ${renderAboutCaseSection(caseItem)}
+
+            ${renderGuidanceSection(caseItem)}
+
+            ${showState ? `
+            <section class="detail-section">
+                <h3>Bieżący stan</h3>
+                <p>${escapeHtml(stateLabel)}</p>
+            </section>` : ''}
+
+            ${renderMailboxMemorySection(caseItem)}
+
+            ${renderDetailSectionIfContent('Checklista braków', renderMissingInfoDetail(caseItem))}
+            ${caseItem.risk_summary_pl || (caseItem.risks || []).length ? renderDetailSectionIfContent('Ryzyka', `${caseItem.risk_summary_pl ? `<p>${escapeHtml(caseItem.risk_summary_pl)}</p>` : ''}${renderRiskSummary(caseItem.risks || [])}`) : ''}
+            ${(caseItem.blockers || []).length ? renderDetailSectionIfContent('Blokery', renderStringList(caseItem.blockers || [], '')) : ''}
+            ${(caseItem.merge_candidates || []).length || (caseItem.split_suspicions || []).length
+            ? renderDetailSectionIfContent('Połączenia i podziały', renderSuggestionItems([...(caseItem.merge_candidates || []), ...(caseItem.split_suspicions || [])], ''))
+            : ''}
+
+            ${renderCaseProjectionExtras(caseItem, payload)}
+
+            ${calendarHtml.includes('Brak powiązanych') ? '' : `
+            <section class="detail-section detail-section-intelligence">
+                <h3>Terminy</h3>
+                ${calendarHtml}
+            </section>`}
+
+            ${docHtml.includes('Brak wyników') ? '' : `
+            <section class="detail-section detail-section-intelligence">
+                <h3>Dokumenty</h3>
+                ${docHtml}
+            </section>`}
+
+            ${timeline.length ? `
+            <section class="detail-section detail-section-intelligence">
+                <h3>Dziennik operacyjny</h3>
+                ${renderOperationalTimeline(timeline)}
+            </section>` : ''}
+
+            ${(payload.desk_notes || []).length ? `
+            <section class="detail-section">
+                <h3>Kartki na biurku</h3>
+                <div class="detail-note-list">${(payload.desk_notes || []).map(note => renderOperationalNoteRecord({
+                note_id: note.note_id,
+                case_id: note.case_id,
+                title: note.title,
+                summary: note.summary,
+                operator_essence_pl: note.operator_essence_pl,
+                why_on_desk: note.why_on_desk,
+                recommended_next_step: note.recommended_next_step,
+                primary_next_action_title_pl: note.primary_next_action_title_pl,
+                presence_mode: note.presence_mode,
+                case_title: caseItem.title,
+                updated_at: note.updated_at,
+                latest_signal_at: note.latest_signal_at,
+                source_signal_ids: note.source_signal_ids,
+                feedback_eligible: note.feedback_eligible,
+                v2_desk_note_id: note.v2_desk_note_id,
+            }, { showDone: false, compact: true })).join('')}</div>
+            </section>` : ''}
+
+            ${caseTech}
+        </div>
+    `;
+    scheduleDetailPanelFocus();
+}
+
+function daszekLabel(mode) {
+    return {
+        silent: 'Cicho',
+        subtle: 'Dyskretnie',
+        standard: 'Standardowo',
+        advisory: 'Doradczo',
+        strong: 'Stanowczo',
+        alarm: 'Alarmowo',
+    }[mode] || 'Standardowo';
+}
+
+function daszekLifecycle(stateValue) {
+    return {
+        active: 'Aktywna',
+        suppressed: 'Wyciszona',
+        resolved: 'Załatwiona',
+        archived: 'Archiwalna',
+    }[stateValue] || 'Aktywna';
+}
+
+async function sendFeedback(noteId, action, extra = {}) {
+    const resolvedId = String(noteId || '').trim();
+    if (!resolvedId.startsWith('note_')) {
+        showError('Ta kartka nie ma jeszcze zapisu w magazynie — odśwież dane i spróbuj ponownie.');
+        return;
+    }
+    try {
+        await apiFetch(V2_API_BASE, `/desk-notes/${resolvedId}/feedback`, {
+            method: 'POST',
+            body: JSON.stringify({ action, ...extra }),
+        });
+        showToast('Ocena została zapisana.');
+        await loadAllData();
+        if (state.detail && state.detail.type === 'note' && state.detail.payload.note?.note_id === noteId) {
+            await openNoteDetail(noteId);
+        }
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+async function decideActionProposal(proposalId, decision) {
+    if (!canCurrentUserDecideActionProposals()) {
+        showError('Tę decyzję może zapisać tylko owner Daszka.');
+        return;
+    }
+    const reason = window.prompt(decision === 'approve' ? 'Powód zatwierdzenia' : 'Powód odrzucenia', '') || '';
+    try {
+        await apiFetch(V2_API_BASE, `/action-proposals/${encodeURIComponent(proposalId)}/${decision}`, {
+            method: 'POST',
+            body: JSON.stringify({ reason }),
+        });
+        showToast('Decyzja została zapisana do kolejki bridge.');
+        await loadAllData();
+        if (state.detail && state.detail.type === 'case') {
+            await openCaseDetail(state.detail.payload.case.case_id);
+        }
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+async function markTaskDone(taskId) {
+    try {
+        await apiFetch(V1_API_BASE, `/tasks/${taskId}/done`, { method: 'POST' });
+        showToast('Zadanie zostało oznaczone jako załatwione.');
+        await loadAllData();
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+async function editTaskDue(taskId) {
+    const current = (state.data.tasks || []).find(task => task.id === taskId);
+    const nextDate = window.prompt('Podaj termin w formacie RRRR-MM-DD', current?.due_at || '');
+    if (nextDate === null) {
+        return;
+    }
+    try {
+        await apiFetch(V1_API_BASE, `/tasks/${taskId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ due_at: nextDate || null }),
+        });
+        showToast('Termin został zapisany.');
+        await loadAllData();
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+async function createManualTask(formData) {
+    const data = {
+        title: formData.get('title'),
+        due_at: formData.get('due_at') || null,
+        priority: formData.get('priority') || 'medium',
+        note: formData.get('note') || null,
+        kind: 'task',
+    };
+
+    try {
+        await apiFetch(V1_API_BASE, '/tasks', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+        showToast('Ręczne zadanie zostało dodane.');
+        document.getElementById('manual-task-form').reset();
+        await loadAllData();
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    installDaszekNavHandlers();
+
+    initDaszekTheme();
+    const backdrop = document.getElementById('detail-panel-backdrop');
+    if (backdrop) {
+        backdrop.addEventListener('click', () => {
+            state.detail = null;
+            renderDetailPanel();
+        });
+    }
+
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', event => {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            login(formData.get('login'), formData.get('password'));
+        });
+    }
+
+    bindClick('logout-btn', () => { void logout(); });
+    bindClick('refresh-btn', async () => {
+        const view = normalizeMainViewId(state.currentView);
+        if (view === 'last_ingress') {
+            await startLastIngressViewLoad();
+            return;
+        }
+        await loadAllData();
+    });
+
+    const globalSearch = document.getElementById('global-search');
+    if (globalSearch) {
+        globalSearch.addEventListener('input', event => {
+            state.search = event.target.value || '';
+            renderCurrentView();
+        });
+    }
+
+    const viewRoot = document.getElementById('view-root');
+    if (viewRoot) {
+        viewRoot.addEventListener('click', event => {
+            const cohortBtn = event.target.closest('[data-open-cohort-run]');
+            if (cohortBtn) {
+                const rid = cohortBtn.getAttribute('data-open-cohort-run') || cohortBtn.dataset.openCohortRun || '';
+                void openCohortRunDetail(rid);
+                return;
+            }
+            const copyRun = event.target.closest('[data-copy-run-id]');
+            if (copyRun) {
+                const text = copyRun.getAttribute('data-copy-run-id') || '';
+                if (text && navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => showToast('Skopiowano run_id')).catch(() => showToast('Kopiowanie nie powiodło się'));
+                } else {
+                    showToast('Brak run_id do skopiowania');
+                }
+                return;
+            }
+            const archiveTrigger = event.target.closest('[data-archive-case]');
+            if (archiveTrigger) {
+                event.preventDefault();
+                event.stopPropagation();
+                void archiveCaseById(archiveTrigger.getAttribute('data-archive-case') || archiveTrigger.dataset.archiveCase || '');
+                return;
+            }
+            const unarchiveTrigger = event.target.closest('[data-unarchive-case]');
+            if (unarchiveTrigger) {
+                event.preventDefault();
+                event.stopPropagation();
+                void unarchiveCaseById(unarchiveTrigger.getAttribute('data-unarchive-case') || unarchiveTrigger.dataset.unarchiveCase || '');
+                return;
+            }
+            const noteTrigger = event.target.closest('[data-open-note]');
+            if (noteTrigger) {
+                openNoteDetail(noteTrigger.dataset.openNote);
+                return;
+            }
+            const caseTrigger = event.target.closest('[data-open-case]');
+            if (caseTrigger) {
+                openCaseDetail(caseTrigger.dataset.openCase);
+                return;
+            }
+            const feedbackTrigger = event.target.closest('[data-note-action]');
+            if (feedbackTrigger) {
+                sendFeedback(feedbackTrigger.dataset.noteId, feedbackTrigger.dataset.noteAction);
+                return;
+            }
+            const approveTrigger = event.target.closest('[data-action-proposal-approve]');
+            if (approveTrigger) {
+                decideActionProposal(approveTrigger.dataset.actionProposalApprove, 'approve');
+                return;
+            }
+            const rejectTrigger = event.target.closest('[data-action-proposal-reject]');
+            if (rejectTrigger) {
+                decideActionProposal(rejectTrigger.dataset.actionProposalReject, 'reject');
+                return;
+            }
+            const mergeTrigger = event.target.closest('[data-note-merge]');
+            if (mergeTrigger) {
+                const targetCaseId = window.prompt('Podaj identyfikator sprawy, z którą połączyć kartkę');
+                if (targetCaseId) {
+                    sendFeedback(mergeTrigger.dataset.noteMerge, 'polacz_ze_sprawa', { target_case_id: targetCaseId });
+                }
+                return;
+            }
+            const taskDoneTrigger = event.target.closest('[data-task-done]');
+            if (taskDoneTrigger) {
+                markTaskDone(taskDoneTrigger.dataset.taskDone);
+                return;
+            }
+            const taskDueTrigger = event.target.closest('[data-task-due]');
+            if (taskDueTrigger) {
+                editTaskDue(taskDueTrigger.dataset.taskDue);
+            }
+        });
+    }
+
+    const detailPanel = document.getElementById('detail-panel');
+    if (detailPanel) {
+        detailPanel.addEventListener('click', event => {
+            const retryTrigger = event.target.closest('[data-retry-detail]');
+            if (retryTrigger) {
+                const mode = retryTrigger.dataset.retryDetail;
+                const rid = retryTrigger.dataset.retryId || '';
+                if (mode === 'note') {
+                    void openNoteDetail(rid);
+                } else if (mode === 'case') {
+                    void openCaseDetail(rid);
+                }
+                return;
+            }
+            if (event.target.closest('[data-refresh-operational-feed]')) {
+                state.detail = null;
+                renderDetailPanel();
+                void loadAllData();
+                return;
+            }
+            if (event.target.closest('[data-close-detail]')) {
+                state.detail = null;
+                renderDetailPanel();
+                return;
+            }
+            const decisionViewAct = event.target.closest('[data-decision-view-action]');
+            if (decisionViewAct) {
+                showToast('Blok decyzyjny jest read-only. Oceń sprawę przez kartkę na biurku, propozycję akcji lub kolejkę bridge — zgodnie z procedurą TOP-INSTAL.');
+                return;
+            }
+            const archiveTrigger = event.target.closest('[data-archive-case]');
+            if (archiveTrigger) {
+                event.preventDefault();
+                event.stopPropagation();
+                void archiveCaseById(archiveTrigger.getAttribute('data-archive-case') || archiveTrigger.dataset.archiveCase || '');
+                return;
+            }
+            const unarchiveTrigger = event.target.closest('[data-unarchive-case]');
+            if (unarchiveTrigger) {
+                event.preventDefault();
+                event.stopPropagation();
+                void unarchiveCaseById(unarchiveTrigger.getAttribute('data-unarchive-case') || unarchiveTrigger.dataset.unarchiveCase || '');
+                return;
+            }
+            const noteTrigger = event.target.closest('[data-open-note]');
+            if (noteTrigger) {
+                openNoteDetail(noteTrigger.dataset.openNote);
+                return;
+            }
+            const caseTrigger = event.target.closest('[data-open-case]');
+            if (caseTrigger) {
+                openCaseDetail(caseTrigger.dataset.openCase);
+                return;
+            }
+            const feedbackTrigger = event.target.closest('[data-note-action]');
+            if (feedbackTrigger) {
+                sendFeedback(feedbackTrigger.dataset.noteId, feedbackTrigger.dataset.noteAction);
+                return;
+            }
+            const approveTrigger = event.target.closest('[data-action-proposal-approve]');
+            if (approveTrigger) {
+                decideActionProposal(approveTrigger.dataset.actionProposalApprove, 'approve');
+                return;
+            }
+            const rejectTrigger = event.target.closest('[data-action-proposal-reject]');
+            if (rejectTrigger) {
+                decideActionProposal(rejectTrigger.dataset.actionProposalReject, 'reject');
+                return;
+            }
+            const mergeTrigger = event.target.closest('[data-note-merge]');
+            if (mergeTrigger) {
+                const targetCaseId = window.prompt('Podaj identyfikator sprawy, z którą połączyć kartkę');
+                if (targetCaseId) {
+                    sendFeedback(mergeTrigger.dataset.noteMerge, 'polacz_ze_sprawa', { target_case_id: targetCaseId });
+                }
+            }
+        });
+
+        detailPanel.addEventListener('submit', event => {
+            const form = event.target.closest('[data-skrzat-form]');
+            if (form) {
+                event.preventDefault();
+                askSkrzat(form.getAttribute('data-skrzat-form'), form);
+            }
+        });
+    }
+
+    if (viewRoot) {
+        viewRoot.addEventListener('submit', event => {
+            if (event.target.id === 'manual-task-form') {
+                event.preventDefault();
+                createManualTask(new FormData(event.target));
+            }
+        });
+    }
+
+    renderDetailPanel();
+    void tryRestoreSession().then(restored => {
+        if (!restored) {
+            showLoginScreen();
+        }
+    });
+});

@@ -1,0 +1,31 @@
+# WordPress
+*.log
+*.sql
+*.sql.gz
+wp-config.php
+wp-content/advanced-cache.php
+wp-content/backup-db/
+wp-content/backups/
+wp-content/blogs.dir/
+wp-content/cache/
+wp-content/upgrade/
+
+includes/config.local.php
+
+# Dane Daszka
+uploads/daszek/tasks*.json
+!uploads/daszek/tasks.json
+
+# Dev tooling (not plugin deploy)
+.gitnexus/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

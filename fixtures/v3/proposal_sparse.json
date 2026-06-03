@@ -1,0 +1,19 @@
+{
+  "case_id": "fixture-proposal-sparse-1",
+  "title": "Fixture: propozycja minimalna",
+  "summary": "Uboga projekcja — propozycja bez payload, bez evidence_refs i bez pełnych pól statusu.",
+  "evidence_cards": [],
+  "conflicting_facts": [],
+  "completeness_gaps": [],
+  "graph_hints": [],
+  "service_signals": [],
+  "marketing_signals": [],
+  "action_proposals": [
+    {
+      "action_type": "nudge_client_generic",
+      "recommended_operator_action": "Poproś klienta o doprecyzowanie w jednym zdaniu."
+    }
+  ],
+  "proposed_next_actions": [],
+  "execution_results": []
+}

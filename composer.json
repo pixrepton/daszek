@@ -1,0 +1,34 @@
+{
+    "name": "topinstal/daszek",
+    "description": "System zarządzania zadaniami firmowymi dla TOP-INSTAL",
+    "type": "wordpress-plugin",
+    "version": "1.0.0",
+    "license": "proprietary",
+    "authors": [
+        {
+            "name": "TOP-INSTAL",
+            "email": "info@topinstal.com.pl"
+        }
+    ],
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "files": [
+            "includes/config.php",
+            "includes/auth.php",
+            "includes/store.php",
+            "includes/cycles.php",
+            "includes/api.php",
+            "includes/cron.php"
+        ]
+    },
+    "keywords": [
+        "wordpress",
+        "plugin",
+        "tasks",
+        "management",
+        "todo"
+    ]
+}
+

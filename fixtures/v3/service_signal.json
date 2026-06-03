@@ -1,0 +1,26 @@
+{
+  "case_id": "fixture-service-1",
+  "title": "Fixture: sygnał serwisowy",
+  "summary": "Rekomendacja serwisowa (nie wykonana).",
+  "evidence_cards": [],
+  "conflicting_facts": [],
+  "completeness_gaps": [],
+  "graph_hints": [],
+  "service_signals": [
+    {
+      "type": "service",
+      "subtype": "warranty_service_state",
+      "summary": "Kontekst gwarancji (fixture)",
+      "recommended_operator_action": "Zweryfikuj dokument serwisowy.",
+      "risk_level": "low",
+      "requires_approval": true,
+      "evidence_refs": [],
+      "policy_status": "allowed_for_projection",
+      "status": "new"
+    }
+  ],
+  "marketing_signals": [],
+  "action_proposals": [],
+  "proposed_next_actions": [],
+  "execution_results": []
+}

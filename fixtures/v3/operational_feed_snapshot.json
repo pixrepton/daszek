@@ -1,0 +1,303 @@
+{
+  "schema_name": "daszek_operational_feed_snapshot",
+  "schema_version": "1",
+  "snapshot_id": "op-feed-fixture-rich",
+  "created_at": "2026-05-01T12:00:00Z",
+  "generated_at": "2026-05-01T12:00:00Z",
+  "title": "Operational feed (bogaty fixture)",
+  "subtitle": "Dane syntetyczne do przeglądu UI — bez klientów.",
+  "read_only": true,
+  "creates_cases": false,
+  "executes_actions": false,
+  "gate_claim": false,
+  "feed": {
+    "desk": [
+      {
+        "note_id": "note-fix-1",
+        "case_id": "case-fix-1",
+        "title": "Priorytet: uzgodnienie terminu serwisu",
+        "operator_essence_pl": "Klient oczekuje potwierdzenia terminu serwisu — potrzebny telefon zwrotny.",
+        "summary": "Klient oczekuje potwierdzenia wizyty.",
+        "v2_desk_note_id": "note-fix-1",
+        "feedback_eligible": true,
+        "why_on_desk": "Wymaga uwagi operatora — brak potwierdzenia wątku.",
+        "presence_mode": "strong",
+        "priority": "high",
+        "recommended_next_step": "Zadzwoń i potwierdź termin.",
+        "primary_next_action_title_pl": "Potwierdź wizytę serwisową",
+        "case_title": "Serwis — jednostka rooftop"
+      },
+      {
+        "note_id": "note-fix-2",
+        "case_id": "case-fix-2",
+        "title": "Dostawa części — opóźnienie",
+        "summary": "Dostawca przesunął shipment o 2 dni.",
+        "presence_mode": "standard",
+        "priority": "medium",
+        "recommended_next_step": "Informacja do klienta po decyzji operatora.",
+        "case_title": "Logistyka części"
+      }
+    ],
+    "day": {
+      "sections": [
+        {
+          "key": "teraz",
+          "title": "Teraz",
+          "subtitle": "Z planu dnia w migawce",
+          "items": [
+            {
+              "note_id": "note-fix-day-1",
+              "case_id": "case-fix-1",
+              "title": "Callback do klienta",
+              "summary": "Umówiony telefon po południu.",
+              "presence_mode": "standard",
+              "why_on_desk": "Termin zapisany w snapshotcie.",
+              "recommended_next_step": "Wykonaj telefon."
+            }
+          ]
+        }
+      ]
+    },
+    "cases": [
+      {
+        "case_id": "case-fix-1",
+        "title": "Serwis — jednostka rooftop",
+        "operator_essence_pl": "Przegląd roczny jednostki rooftop — brak potwierdzonego terminu wizyty.",
+        "v2_desk_note_id": "note-fix-1",
+        "feedback_eligible": true,
+        "summary": "Przegląd roczny i uzupełnienie czynnika.",
+        "status": "active",
+        "priority": "high",
+        "primary_next_action_title_pl": "Potwierdź wizytę",
+        "evidence_cards": [
+          {
+            "evidence_id": "ev-1",
+            "summary": "Potwierdzenie zgłoszenia e-mail (meta)",
+            "source_type": "email_meta",
+            "timestamp": "2026-04-28T10:00:00Z",
+            "confidence": 0.82
+          }
+        ],
+        "completeness_gaps": [
+          {
+            "summary": "Brak numeru telefonu komórkowego klienta",
+            "severity": "warning",
+            "status": "open",
+            "suggested_next_action": "Poproś o kontakt zwrotny",
+            "blocking": false
+          }
+        ],
+        "conflicting_facts": [
+          {
+            "summary": "Rozbieżność mocy jednostki w dwóch dokumentach",
+            "severity": "info",
+            "status": "open",
+            "values": [
+              "12 kW",
+              "14 kW"
+            ]
+          }
+        ],
+        "service_signals": [
+          {
+            "summary": "Możliwy przegląd filtrów przy najbliższej wizycie",
+            "recommended_operator_action": "Zaproponuj przegląd filtrów po uzgodnieniu z klientem.",
+            "risk_level": "low"
+          }
+        ],
+        "marketing_signals": [
+          {
+            "summary": "Klient pytał o program poleceń",
+            "recommended_operator_action": "Sprawdź zgodę marketingu przed wysłaniem materiałów."
+          }
+        ],
+        "action_proposals": [
+          {
+            "proposal_id": "prop-fix-1",
+            "title": "Szkic odpowiedzi z potwierdzeniem terminu",
+            "recommended_operator_action": "Wyślij potwierdzenie terminu po weryfikacji kalendarza.",
+            "reason": "Spójność z ustaleniami serwisowymi",
+            "risk_level": "medium",
+            "requires_approval": true,
+            "policy_status": "pending_review",
+            "status": "proposed"
+          }
+        ],
+        "proposed_next_actions": [],
+        "operator_visible_conflicts": [],
+        "latest_signal_at": "2026-04-29T08:00:00Z"
+      },
+      {
+        "case_id": "case-fix-2",
+        "title": "Logistyka części",
+        "summary": "Opóźniona dostawa zewnętrzna.",
+        "status": "active",
+        "priority": "medium",
+        "evidence_cards": [],
+        "completeness_gaps": [],
+        "conflicting_facts": [],
+        "service_signals": [],
+        "marketing_signals": [],
+        "action_proposals": [],
+        "proposed_next_actions": []
+      },
+      {
+        "case_id": "case-fix-3",
+        "title": "Sprawa szkieletowa",
+        "summary": "Tylko identyfikator — treść w osobnym kanale.",
+        "status": "snoozed",
+        "priority": "low"
+      }
+    ],
+    "tasks": [
+      {
+        "task_id": "ftask-1",
+        "title": "Telefon potwierdzający wizytę",
+        "summary": "Przypomnienie z operational feed",
+        "linked_case_id": "case-fix-1",
+        "source_type": "next_action",
+        "status": "open",
+        "requires_approval": false,
+        "feed_read_only": true,
+        "evidence_refs": [
+          {
+            "ref": "ev-1"
+          }
+        ]
+      },
+      {
+        "task_id": "ftask-2",
+        "title": "Sprawdź dokument dostawcy",
+        "summary": "Porównaj ETA z umową",
+        "linked_case_id": "case-fix-2",
+        "source_type": "gap",
+        "status": "open",
+        "requires_approval": false,
+        "feed_read_only": true,
+        "evidence_refs": []
+      },
+      {
+        "task_id": "ftask-3",
+        "title": "Akceptacja szkicu odpowiedzi",
+        "summary": "Propozycja działania — tylko owner",
+        "linked_case_id": "case-fix-1",
+        "source_type": "action_proposal",
+        "status": "open",
+        "requires_approval": true,
+        "risk_level": "medium",
+        "feed_read_only": true,
+        "evidence_refs": [
+          {
+            "ref": "prop-fix-1"
+          }
+        ]
+      }
+    ],
+    "case_details": {
+      "case-fix-1": {
+        "ok": true,
+        "generated_at": "2026-05-01T12:00:00Z",
+        "case": {
+          "case_id": "case-fix-1",
+          "title": "Serwis — jednostka rooftop",
+          "summary": "Przegląd roczny i uzupełnienie czynnika.",
+          "operator_brief_pl": "Klient czeka na potwierdzenie wizyty serwisowej.",
+          "primary_next_action_title_pl": "Potwierdź wizytę",
+          "primary_next_action_reason_pl": "Brak potwierdzenia w kanale operacyjnym.",
+          "current_state": "active",
+          "evidence_cards": [
+            {
+              "evidence_id": "ev-1",
+              "summary": "Potwierdzenie zgłoszenia e-mail (meta)",
+              "source_type": "email_meta",
+              "timestamp": "2026-04-28T10:00:00Z",
+              "confidence": 0.82
+            }
+          ],
+          "completeness_gaps": [
+            {
+              "summary": "Brak numeru telefonu komórkowego klienta",
+              "severity": "warning",
+              "status": "open",
+              "suggested_next_action": "Poproś o kontakt zwrotny",
+              "blocking": false
+            }
+          ],
+          "conflicting_facts": [
+            {
+              "summary": "Rozbieżność mocy jednostki w dwóch dokumentach",
+              "severity": "info",
+              "status": "open",
+              "values": [
+                "12 kW",
+                "14 kW"
+              ]
+            }
+          ],
+          "graph_hints": [
+            {
+              "hint": "Powiązanie z dostawcą części case-fix-2",
+              "confidence": 0.4
+            }
+          ],
+          "service_signals": [
+            {
+              "summary": "Możliwy przegląd filtrów przy najbliższej wizycie",
+              "recommended_operator_action": "Zaproponuj przegląd filtrów po uzgodnieniu z klientem.",
+              "risk_level": "low"
+            }
+          ],
+          "marketing_signals": [
+            {
+              "summary": "Klient pytał o program poleceń",
+              "recommended_operator_action": "Sprawdź zgodę marketingu przed wysłaniem materiałów."
+            }
+          ],
+          "action_proposals": [
+            {
+              "proposal_id": "prop-fix-1",
+              "title": "Szkic odpowiedzi z potwierdzeniem terminu",
+              "recommended_operator_action": "Wyślij potwierdzenie terminu po weryfikacji kalendarza.",
+              "reason": "Spójność z ustaleniami serwisowymi",
+              "risk_level": "medium",
+              "requires_approval": true,
+              "policy_status": "pending_review",
+              "status": "proposed"
+            }
+          ],
+          "proposed_next_actions": []
+        },
+        "signals": [],
+        "decision_traces": [],
+        "desk_notes": [],
+        "operational_timeline": [],
+        "execution_results": [
+          {
+            "action_type": "operator_ack",
+            "execution_status": "completed",
+            "summary_pl": "Operator oznaczył temat jako pilny do oddzwonienia."
+          }
+        ],
+        "action_proposals": []
+      },
+      "case-fix-2": {
+        "ok": true,
+        "case": {
+          "case_id": "case-fix-2",
+          "title": "Logistyka części",
+          "summary": "Opóźniona dostawa zewnętrzna."
+        },
+        "desk_notes": [],
+        "signals": []
+      },
+      "case-fix-3": {
+        "ok": true,
+        "case": {
+          "case_id": "case-fix-3",
+          "title": "Sprawa szkieletowa",
+          "summary": "Minimalny zestaw pól — większość sekcji poza szczegółami technicznymi."
+        }
+      }
+    }
+  }
+}

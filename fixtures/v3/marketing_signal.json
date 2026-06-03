@@ -1,0 +1,26 @@
+{
+  "case_id": "fixture-marketing-1",
+  "title": "Fixture: sygnał marketingowy",
+  "summary": "Rekomendacja marketingowa (nie wykonana).",
+  "evidence_cards": [],
+  "conflicting_facts": [],
+  "completeness_gaps": [],
+  "graph_hints": [],
+  "service_signals": [],
+  "marketing_signals": [
+    {
+      "type": "marketing",
+      "subtype": "media_evidence_presence",
+      "summary": "Materiały medialne do weryfikacji (fixture)",
+      "recommended_operator_action": "Sprawdź zgodę na wykorzystanie materiałów.",
+      "risk_level": "medium",
+      "requires_approval": true,
+      "evidence_refs": [],
+      "policy_status": "allowed_for_projection",
+      "status": "new"
+    }
+  ],
+  "action_proposals": [],
+  "proposed_next_actions": [],
+  "execution_results": []
+}

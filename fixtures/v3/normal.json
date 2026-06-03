@@ -1,0 +1,48 @@
+{
+  "case_id": "fixture-normal-1",
+  "title": "Fixture: sprawa z dowodami",
+  "summary": "Syntetyczna sprawa testowa.",
+  "evidence_cards": [
+    {
+      "evidence_id": "ev_fixture_1",
+      "source_type": "gmail_message",
+      "source_id": "msg-fixture-1",
+      "summary": "Wiadomość klienta (fixture)"
+    }
+  ],
+  "conflicting_facts": [],
+  "completeness_gaps": [],
+  "graph_hints": [],
+  "service_signals": [],
+  "marketing_signals": [],
+  "action_proposals": [
+    {
+      "proposal_id": "ap-fix-norm-1",
+      "action_type": "request_nameplate_photo",
+      "status": "proposed",
+      "risk_class": "low",
+      "risk_level": "low",
+      "title": "Poproś o tabliczkę znamionową",
+      "summary": "System sugeruje poprosić klienta o zdjęcie tabliczki znamionowej.",
+      "recommended_operator_action": "Wyślij klientowi prośbę o zdjęcie tabliczki znamionowej.",
+      "reason": "Brakuje modelu urządzenia.",
+      "evidence_refs": [
+        "msg-fixture-1"
+      ],
+      "requires_approval": true,
+      "policy_status": "allowed_for_projection",
+      "payload": {
+        "device_hint": "unknown"
+      }
+    }
+  ],
+  "proposed_next_actions": [
+    {
+      "proposal_id": "ap-fix-norm-1",
+      "action_type": "request_nameplate_photo",
+      "status": "proposed",
+      "summary": "Duplikat kontrolny dedupe (ten sam proposal_id)"
+    }
+  ],
+  "execution_results": []
+}

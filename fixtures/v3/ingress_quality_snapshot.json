@@ -1,0 +1,289 @@
+{
+  "schema_name": "daszek_ingress_quality_snapshot",
+  "schema_version": "1",
+  "snapshot_type": "latest_gmail_ingress",
+  "run_id": "20260430-230735-818987-shadow-period-44d53c",
+  "created_at": "2026-05-01T03:21:07Z",
+  "source_run_started_at": "2026-04-30T23:07:35.818987+02:00",
+  "source_run_completed_at": "2026-04-30T23:18:06.136404+02:00",
+  "source_run_dir_reference": "tools/gmail_audit/runs/20260430-230735-818987-shadow-period-44d53c",
+  "title": "Ostatni ingress",
+  "subtitle": "Podgląd jakości ostatniego bounded ingress (read-only).",
+  "operator_label": "Podgląd jakości ingressu — nie tworzy spraw i nie wykonuje akcji",
+  "read_only": true,
+  "creates_cases": false,
+  "executes_actions": false,
+  "gate_claim": false,
+  "live_gmail_used": true,
+  "mailbox_memory_mutated": true,
+  "daszek_persisted_push_count": 0,
+  "local_projection_preview_count": 20,
+  "outbound_actions": false,
+  "counts": {
+    "selected_count": 20,
+    "processed_count": 20,
+    "valid_count": 19,
+    "failed_count": 1,
+    "skipped_count": 0,
+    "needs_retry_count": 0,
+    "projected_count": 0
+  },
+  "decision_distribution": {
+    "ignore": 6,
+    "create_case": 2,
+    "append_to_existing_case": 5,
+    "review": 2,
+    "update_case_state": 1,
+    "create_task": 1,
+    "mark_reference": 2
+  },
+  "llm": {
+    "rate_limit_events": 20,
+    "truncation_count": 17,
+    "invalid_json": 0,
+    "schema_invalid": 0,
+    "semantic_invalid": 1,
+    "repaired_valid_count": null
+  },
+  "failed_items": [
+    {
+      "message_id": "19dd375c8c1cfc36",
+      "status": "failed",
+      "non_sensitive_reason": "model output had `decision_confidence` implausibly higher than `signal_confidence`.",
+      "recommended_operator_action": "Uruchom targeted rerun pojedynczej wiadomości po cooldown albo inspekcję rekordu walidacji."
+    }
+  ],
+  "manual_review_items": [
+    {
+      "message_id": "19dd8ec491688c73",
+      "decision": "review",
+      "case_id": "",
+      "status": "needs_review",
+      "operator_question": "Czy wymaga ręcznego review?",
+      "truncated": false
+    },
+    {
+      "message_id": "19dd375c8c1cfc36",
+      "decision": "",
+      "case_id": "",
+      "status": "failed",
+      "operator_question": "Czy oznaczenie referencyjne jest wystarczające?",
+      "truncated": true
+    },
+    {
+      "message_id": "19dd35eb846846c0",
+      "decision": "review",
+      "case_id": "case_02037bcba773",
+      "status": "needs_review",
+      "operator_question": "Czy wymaga ręcznego review?",
+      "truncated": true
+    }
+  ],
+  "items": [
+    {
+      "index": 1,
+      "message_id": "19ddfbbddfaab593",
+      "decision": "mark_reference",
+      "case_id": "case_e43fc9732a53",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy oznaczenie referencyjne jest wystarczające?",
+      "policy_status": null
+    },
+    {
+      "index": 2,
+      "message_id": "19dddddff8e20f74",
+      "decision": "append_to_existing_case",
+      "case_id": "case_0f762dc349cf",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy sprawa została dobrze połączona?",
+      "policy_status": null
+    },
+    {
+      "index": 3,
+      "message_id": "19dddd8a07fea7ac",
+      "decision": "update_case_state",
+      "case_id": "case_0f762dc349cf",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy update stanu wygląda logicznie?",
+      "policy_status": null
+    },
+    {
+      "index": 4,
+      "message_id": "19dddcd5d8846382",
+      "decision": "append_to_existing_case",
+      "case_id": "case_0f762dc349cf",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy sprawa została dobrze połączona?",
+      "policy_status": null
+    },
+    {
+      "index": 5,
+      "message_id": "19dddc577d76cc4a",
+      "decision": "ignore",
+      "case_id": "",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy ignorowanie było słuszne?",
+      "policy_status": null
+    },
+    {
+      "index": 6,
+      "message_id": "19dd935d3a54258f",
+      "decision": "ignore",
+      "case_id": "",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy ignorowanie było słuszne?",
+      "policy_status": null
+    },
+    {
+      "index": 7,
+      "message_id": "19dd9190ec66da2e",
+      "decision": "create_case",
+      "case_id": "case_cf814708e428",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy nowa sprawa ma sens?",
+      "policy_status": null
+    },
+    {
+      "index": 8,
+      "message_id": "19dd8ec491688c73",
+      "decision": "review",
+      "case_id": "",
+      "status": "needs_review",
+      "truncated": false,
+      "operator_question": "Czy wymaga ręcznego review?",
+      "policy_status": null
+    },
+    {
+      "index": 9,
+      "message_id": "19dd8e0387b1d61a",
+      "decision": "create_task",
+      "case_id": "",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy zadanie jest uzasadnione?",
+      "policy_status": null
+    },
+    {
+      "index": 10,
+      "message_id": "19dd8b43335e6582",
+      "decision": "create_case",
+      "case_id": "case_37fe3dc6fb45",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy nowa sprawa ma sens?",
+      "policy_status": null
+    },
+    {
+      "index": 11,
+      "message_id": "19dd8a22688e3047",
+      "decision": "append_to_existing_case",
+      "case_id": "case_aad834dc9ab5",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy sprawa została dobrze połączona?",
+      "policy_status": null
+    },
+    {
+      "index": 12,
+      "message_id": "19dd89035f58bded",
+      "decision": "append_to_existing_case",
+      "case_id": "case_aad834dc9ab5",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy sprawa została dobrze połączona?",
+      "policy_status": null
+    },
+    {
+      "index": 13,
+      "message_id": "19dd88dcb7fc6357",
+      "decision": "ignore",
+      "case_id": "",
+      "status": "valid",
+      "truncated": false,
+      "operator_question": "Czy ignorowanie było słuszne?",
+      "policy_status": null
+    },
+    {
+      "index": 14,
+      "message_id": "19dd85d353553e11",
+      "decision": "append_to_existing_case",
+      "case_id": "case_aad834dc9ab5",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy sprawa została dobrze połączona?",
+      "policy_status": null
+    },
+    {
+      "index": 15,
+      "message_id": "19dd3f6a664a838b",
+      "decision": "ignore",
+      "case_id": "",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy ignorowanie było słuszne?",
+      "policy_status": null
+    },
+    {
+      "index": 16,
+      "message_id": "19dd3a4ef2ec308a",
+      "decision": "ignore",
+      "case_id": "",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy ignorowanie było słuszne?",
+      "policy_status": null
+    },
+    {
+      "index": 17,
+      "message_id": "19dd375c8c1cfc36",
+      "decision": "",
+      "case_id": "",
+      "status": "failed",
+      "truncated": true,
+      "operator_question": "Czy oznaczenie referencyjne jest wystarczające?",
+      "policy_status": null
+    },
+    {
+      "index": 18,
+      "message_id": "19dd35eb846846c0",
+      "decision": "review",
+      "case_id": "case_02037bcba773",
+      "status": "needs_review",
+      "truncated": true,
+      "operator_question": "Czy wymaga ręcznego review?",
+      "policy_status": null
+    },
+    {
+      "index": 19,
+      "message_id": "19dd31aee9f5eee4",
+      "decision": "mark_reference",
+      "case_id": "",
+      "status": "valid",
+      "truncated": true,
+      "operator_question": "Czy oznaczenie referencyjne jest wystarczające?",
+      "policy_status": null
+    },
+    {
+      "index": 20,
+      "message_id": "19dceff039aecf08",
+      "decision": "ignore",
+      "case_id": "",
+      "status": "valid",
+      "truncated": false,
+      "operator_question": "Czy ignorowanie było słuszne?",
+      "policy_status": null
+    }
+  ],
+  "report_refs": {
+    "latest20_run_report.md": "latest20_run_report.md",
+    "latest20_operator_review.md": "latest20_operator_review.md",
+    "latest20_operator_review.json": "latest20_operator_review.json"
+  }
+}

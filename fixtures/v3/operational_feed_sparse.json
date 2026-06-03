@@ -1,0 +1,40 @@
+{
+  "schema_name": "daszek_operational_feed_snapshot",
+  "schema_version": "1",
+  "snapshot_id": "op-feed-fixture-sparse",
+  "created_at": "2026-05-01T12:00:00Z",
+  "generated_at": "2026-05-01T12:00:00Z",
+  "title": "Operational feed (sparse)",
+  "read_only": true,
+  "creates_cases": false,
+  "executes_actions": false,
+  "feed": {
+    "desk": [],
+    "day": {
+      "sections": []
+    },
+    "cases": [
+      {
+        "case_id": "sparse-case-1",
+        "title": "Sprawa bez pełnych szczegółów w migawce",
+        "operator_essence_pl": "Minimalny wpis — brak pełnej migawki w fixture.",
+        "feedback_eligible": false,
+        "summary": "Minimalny wpis",
+        "status": "active"
+      }
+    ],
+    "tasks": [],
+    "case_details": {
+      "sparse-case-1": {
+        "ok": true,
+        "case": {
+          "case_id": "sparse-case-1",
+          "title": "Sprawa bez pełnych szczegółów w migawce",
+          "summary": "Minimalny wpis"
+        },
+        "signals": [],
+        "desk_notes": []
+      }
+    }
+  }
+}
