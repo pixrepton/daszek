@@ -2,14 +2,14 @@
 /**
  * Plugin Name: Daszek
  * Description: System zarzadzania zadaniami i itemami intake dla TOP-INSTAL
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: TOP-INSTAL
  * Text Domain: daszek
  */
 
 if (!defined('ABSPATH')) exit;
 
-define('DASZEK_VERSION', '1.3.0');
+define('DASZEK_VERSION', '1.3.1');
 define('DASZEK_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('DASZEK_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('DASZEK_DATA_DIR', WP_CONTENT_DIR . '/uploads/daszek/');

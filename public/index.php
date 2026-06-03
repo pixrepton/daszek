@@ -87,13 +87,14 @@ $csrf = daszek_generate_csrf_token();
                 </div>
             </nav>
 
+            <div id="detail-panel-backdrop" class="detail-panel-backdrop" hidden aria-hidden="true"></div>
+
             <div class="workspace">
                 <aside class="sidebar">
                     <div id="view-summary" class="sidebar-card sidebar-summary"></div>
                 </aside>
 
                 <main class="content" role="main" aria-label="Treść Daszek">
-                    <div id="detail-panel-backdrop" class="detail-panel-backdrop" hidden aria-hidden="true"></div>
                     <div id="view-header" class="view-header"></div>
                     <div id="global-error" class="error-message" style="display:none;" role="alert" aria-live="assertive"></div>
                     <div id="view-root" class="view-root" tabindex="-1"></div>

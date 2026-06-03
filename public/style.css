@@ -130,9 +130,8 @@ body {
 
 .workspace {
     --daszek-sidebar-width: 220px;
-    --daszek-detail-width: 340px;
     display: grid;
-    grid-template-columns: var(--daszek-sidebar-width) minmax(360px, 1fr) var(--daszek-detail-width);
+    grid-template-columns: var(--daszek-sidebar-width) minmax(360px, 1fr);
     gap: 1rem;
     padding: 1rem;
     background: var(--surface-app);
@@ -663,12 +662,9 @@ select:focus {
     gap: 0.8rem;
 }
 
-.detail-panel {
-    position: sticky;
-    top: 1rem;
-    align-self: start;
-    max-height: calc(100vh - 2rem);
-    overflow-y: auto;
+/* Detail: overlay modal when open — not a permanent right column (see .screen-main rules). */
+.screen-main .detail-panel {
+    display: none;
 }
 
 .detail-empty {
@@ -877,26 +873,6 @@ select:focus {
 @media (max-width: 980px) {
     .workspace {
         grid-template-columns: 1fr;
-    }
-
-    .detail-panel {
-        position: static;
-    }
-
-    body.detail-panel--open .detail-panel {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        top: auto;
-        max-height: min(88vh, 640px);
-        z-index: 50;
-        margin: 0 0.5rem;
-        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-        box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.2);
-        background: var(--surface-raised);
-        border: 1px solid var(--border-subtle);
-        overflow-y: auto;
     }
 }
 
@@ -1268,11 +1244,6 @@ summary:focus-visible,
         order: 1;
     }
 
-    .detail-panel {
-        order: 3;
-        max-width: 100%;
-        min-height: 12rem;
-    }
 }
 
 /* Daszek V3 task UI — spacing / surfaces (M1) */
@@ -1496,11 +1467,6 @@ button:focus-visible,
         order: 1;
     }
 
-    .detail-panel {
-        order: 3;
-        max-width: 100%;
-        min-height: 12rem;
-    }
 }
 
 .detail-panel-backdrop {
@@ -1511,31 +1477,50 @@ button:focus-visible,
     margin: 0;
     padding: 0;
     border: 0;
-    background: rgba(15, 18, 24, 0.48);
+    background: rgba(15, 18, 24, 0.24);
     cursor: pointer;
 }
 
 .detail-panel-backdrop:not([hidden]) {
     display: block;
-    left: var(--daszek-sidebar-width, 220px);
-    /* Dim only the center column — do not cover the detail panel (clicks must reach the panel). */
-    right: var(--daszek-detail-width, 340px);
+}
+
+body.detail-panel--open {
+    overflow: hidden;
 }
 
 body.detail-panel--open .detail-panel {
-    position: sticky;
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
     z-index: 50;
+    width: min(70vw, 72rem);
+    height: min(70vh, 52rem);
+    max-width: calc(100vw - 2rem);
+    max-height: calc(100vh - 2rem);
+    margin: 0;
+    padding: 0;
+    align-self: auto;
+    transform: translate(-50%, -50%);
+    overflow: hidden;
     isolation: isolate;
+    box-shadow: 0 24px 64px rgba(15, 18, 24, 0.28);
+}
+
+body.detail-panel--open .detail-shell {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 @media (max-width: 980px) {
-    .detail-panel-backdrop:not([hidden]) {
-        left: 0;
-        right: 0;
-    }
-
     body.detail-panel--open .detail-panel {
-        position: fixed;
+        width: min(75vw, calc(100vw - 1rem));
+        height: min(75vh, calc(100vh - 1rem));
     }
 }
 
@@ -1544,6 +1529,14 @@ body.detail-panel--open .detail-panel {
     padding: 0.1em 0.35em;
     border-radius: 4px;
     background: rgba(23, 32, 51, 0.06);
+}
+
+:root[data-theme="dark"] .detail-panel-backdrop {
+    background: rgba(0, 0, 0, 0.38);
+}
+
+:root[data-theme="dark"] body.detail-panel--open .detail-panel {
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
 
 :root[data-theme="dark"] .ds-meta-line .ds-meta-code {
@@ -1683,6 +1676,10 @@ body.detail-panel--open .detail-panel {
     border-radius: var(--radius-lg);
 }
 
+.detail-empty {
+    padding: 1.5rem;
+}
+
 /* Operator PRO — top navigation */
 .view-tabs {
     display: flex;
@@ -1745,7 +1742,7 @@ body.detail-panel--open .detail-panel {
 }
 
 .screen-main .workspace {
-    grid-template-columns: minmax(10rem, 12rem) minmax(0, 1fr) minmax(18rem, 22rem);
+    grid-template-columns: minmax(10rem, 12rem) minmax(0, 1fr);
 }
 
 .sidebar .sidebar-card {
