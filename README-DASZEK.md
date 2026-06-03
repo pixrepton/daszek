@@ -53,7 +53,7 @@ Powiązane normy: [`gmail-agent/docs/core/CONTEXT_PROJECTION_KNOWLEDGE_GRAPH.md`
 
 ## 2. Jedność PRO — jeden panel operatorski
 
-Operator widzi **jeden produkt**: panel Daszek PRO (plugin **1.3.0**), nie „V3 obok V2”.
+Operator widzi **jeden produkt**: panel Daszek PRO (plugin **1.3.1**), nie „V3 obok V2”.
 
 | Warstwa widoczna                   | Źródło danych                                                                        |
 | ---------------------------------- | ------------------------------------------------------------------------------------ |
@@ -809,11 +809,12 @@ node --check ../daszek/public/app.js
 
 ## 18. Historia wersji pluginu
 
-| Wersja    | Data       | Najważniejsze                                                                                                                                               |
-| --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1.3.0** | 2026-05-25 | PRO panel L0–L4; zakładki u góry; feedback; `operator_essence_pl`, `v2_desk_note_id`, `feedback_eligible`; jedna kartka biurka na sprawę; filtr Gate B test |
-| **1.2.3** | 2026-05-23 | Backdrop panelu szczegółów — nie zasłania treści (`z-index`, `right: var(--daszek-detail-width)`)                                                           |
-| **1.2.2** | 2026-05-23 | `#refresh-btn`, `bindClick`, archiwum REST, sort spraw chronologicznie, backdrop sidebar                                                                    |
+| Wersja    | Data       | Najważniejsze                                                                                                                                                          |
+| --------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1.3.1** | 2026-06-03 | Panel szczegółów jako modal wyśrodkowany (~70vw×70vh); backdrop pełnoekranowy poza `.workspace`; siatka biurka 2 kolumny (bez stałego paska detail) — commit `8be0303` |
+| **1.3.0** | 2026-05-25 | PRO panel L0–L4; zakładki u góry; feedback; `operator_essence_pl`, `v2_desk_note_id`, `feedback_eligible`; jedna kartka biurka na sprawę; filtr Gate B test            |
+| **1.2.3** | 2026-05-23 | Backdrop panelu szczegółów — nie zasłania treści (`z-index`, `right: var(--daszek-detail-width)`)                                                                      |
+| **1.2.2** | 2026-05-23 | `#refresh-btn`, `bindClick`, archiwum REST, sort spraw chronologicznie, backdrop sidebar                                                                               |
 
 Starsze: `gmail-agent/memory-bank/agent-handover.md`, `LAST_PROVEN_STATE.md`, proof packs w `knowledge/artifacts/proof-packs/daszek-*.md`.
 
