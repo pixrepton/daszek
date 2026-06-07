@@ -87,6 +87,32 @@ flowchart TB
 
 ## 3. Topologia: Node A i Node B
 
+### Lokalny dev (kanoniczny — Docker)
+
+| Węzeł      | Compose                                                                                | URL z hosta             | Rola                             |
+| ---------- | -------------------------------------------------------------------------------------- | ----------------------- | -------------------------------- |
+| **Node A** | [`docker-compose.daszek-local.yml`](docker-compose.daszek-local.yml)                   | `http://127.0.0.1:8090` | WP + plugin [`daszek/`](daszek/) |
+| **Node B** | [`gmail-agent/docker-compose.local-vps.yml`](gmail-agent/docker-compose.local-vps.yml) | `http://127.0.0.1:8765` | API, worker, Postgres `:54329`   |
+
+**Start (skrót):**
+
+```powershell
+# z root monorepo
+docker compose -f docker-compose.daszek-local.yml up -d
+cd gmail-agent
+docker compose --env-file .env.vps -f docker-compose.local-vps.yml up -d mailbox-memory-db neo4j ollama
+docker compose --env-file .env.vps -f docker-compose.local-vps.yml --profile api up -d gmail-agent-nodeb-api
+docker compose --env-file .env.vps -f docker-compose.local-vps.yml --profile worker up -d gmail-agent-worker
+```
+
+**Env lokalne (gitignored):** `.env.daszek-local` (tokeny WP), `gmail-agent/.env.local-vps` (aplikacja w kontenerze), `gmail-agent/tools/gmail_audit/.env` (CLI/pytest).
+
+WP w Dockerze widzi Node B jako `http://host.docker.internal:8765` (`WORDPRESS_CONFIG_EXTRA` w compose). Node B pushuje feed na `http://host.docker.internal:8090`.
+
+Po zmianach w kodzie Node B: `docker compose ... build gmail-agent-nodeb-api gmail-agent-worker` + recreate kontenerów (obraz **nie** mountuje źródeł — tylko `.env`).
+
+### Produkcja (historyczna — Hostido + VPS)
+
 | Węzeł      | Host (prod)           | Katalog / scope                                             | Rola                                             |
 | ---------- | --------------------- | ----------------------------------------------------------- | ------------------------------------------------ |
 | **Node A** | `topinstal.com.pl`    | `wp-content/plugins/daszek/` ← [`daszek/`](daszek/)         | UI, odbiór migawek, bridge storage, proxy Skrzat |
@@ -94,14 +120,18 @@ flowchart TB
 
 **Brak współdzielonego dysku.** Komunikacja: HTTP/REST (`DASZEK_NODE_B_API_BASE`, `X-Daszek-Bridge-Token`, POST feed, GET bridge-queue).
 
-### wp-config.php (Node A)
+### wp-config.php (Node A — prod) / `.env.daszek-local` (lokalnie)
 
 ```php
 define('DASZEK_NODE_B_API_BASE', 'http://178.104.171.104:8443');
 define('DASZEK_NODE_B_API_TOKEN', '<NODE_B_REGISTRY_TOKEN z VPS>');
+define('DASZEK_BRIDGE_TOKEN', '<DASZEK_BRIDGE_TOKEN z VPS>');
+define('DASZEK_NODE_B_SERVICE_TOKEN', '<DASZEK_NODE_B_SERVICE_TOKEN z VPS>');
 ```
 
-Token na B: `/etc/topinstal/gmail-agent.env` → `NODE_B_REGISTRY_TOKEN` / `DASZEK_BRIDGE_TOKEN`.
+Gotowy blok do wklejenia na **prod** (sekrety): [`knowledge/.local-secrets/wp-config-daszek-1.3.3.transfer.php`](knowledge/.local-secrets/wp-config-daszek-1.3.3.transfer.php) — **nie commituj**. Lokalnie używaj `.env.daszek-local` + compose.
+
+Token na B (prod VPS): `/etc/topinstal/gmail-agent.env`. Lokalnie: `gmail-agent/.env.local-vps` montowane jako `/etc/topinstal/gmail-agent.env`.
 
 Po wgraniu pluginu: **flush permalinków** (WP → Ustawienia → Bezpośrednie odnośniki → Zapisz).
 
@@ -131,7 +161,7 @@ Po wgraniu pluginu: **flush permalinków** (WP → Ustawienia → Bezpośrednie 
 | Drain mostu                 | `gmail-agent/tools/gmail_audit/daszek_bridge_queue_drain.py`              |
 | Skrzat                      | `gmail-agent/tools/gmail_audit/skrzat_runtime.py`, `skrzat_copilot.py`    |
 
-**Move 5 (otwarte):** pełne domknięcie jednego transportu v2/v3 na B — dziś częściowo zunifikowane (`projection_snapshot_transport`); v2 live push nadal istnieje obok feedu.
+**Move 5 (częściowo domknięte 1.3.3):** przy `DASZEK_FEED_SOURCE=engagement_snapshot_v2` v2 live push jest blokowany (`daszek_legacy_v2_push_allowed`, `v2_runtime`); UI Spraw nie degraduje do listy v2 — tylko komunikat braku feedu V3.
 
 ---
 
@@ -155,7 +185,7 @@ node --check public/app.js
 php -l includes/api-v2.php
 
 # z gmail-agent/
-python -m pytest tools/gmail_audit/tests/test_daszek_v3_surface_static.py tools/gmail_audit/tests/test_daszek_v3_fixtures.py -q
+python -m pytest tools/gmail_audit/tests/test_daszek_v3_surface_static.py tools/gmail_audit/tests/test_daszek_v3_fixtures.py tools/gmail_audit/tests/test_agent_hitl_bridge.py -q
 ```
 
 Lokalne testy **≠** proof WordPress produkcyjny.
@@ -263,23 +293,39 @@ Bez `case_id` — najpierw powiąż ze sprawą. Gate B green **≠** przyciski n
 
 ### Macierz fixture V3 (`daszek/fixtures/v3/`)
 
-| Plik                                            | Zawartość                                               |
-| ----------------------------------------------- | ------------------------------------------------------- |
-| `normal.json`                                   | Sprawa z dowodami + propozycja                          |
-| `conflicts.json`                                | Sprzeczności                                            |
-| `gaps.json`                                     | Braki danych                                            |
-| `service_signal.json` / `marketing_signal.json` | Sygnały; granica „rekomendacja, nie wykonane”           |
-| `sparse.json`                                   | Uboga projekcja                                         |
-| `proposal_sparse.json`                          | Propozycja bez payload/evidence                         |
-| `proposed_only.json`                            | Tylko `proposed_next_actions` (brak `action_proposals`) |
-| `operational_feed_snapshot.json`                | Bogaty feed + `case_details`                            |
-| `operational_feed_empty.json`                   | Puste listy — empty states                              |
-| `operational_feed_sparse.json`                  | Jedna sprawa; test fallback v2                          |
-| `ingress_quality_snapshot.json`                 | Jakość bounded ingress (osobny kontekst)                |
+| Plik                                            | Zawartość                                                |
+| ----------------------------------------------- | -------------------------------------------------------- |
+| `normal.json`                                   | Sprawa z dowodami + propozycja                           |
+| `conflicts.json`                                | Sprzeczności                                             |
+| `gaps.json`                                     | Braki danych                                             |
+| `service_signal.json` / `marketing_signal.json` | Sygnały; granica „rekomendacja, nie wykonane”            |
+| `sparse.json`                                   | Uboga projekcja                                          |
+| `proposal_sparse.json`                          | Propozycja bez payload/evidence                          |
+| `proposed_only.json`                            | Tylko `proposed_next_actions` (brak `action_proposals`)  |
+| `operational_feed_snapshot.json`                | Bogaty feed + `case_details`                             |
+| `operational_feed_empty.json`                   | Puste listy — empty states                               |
+| `operational_feed_sparse.json`                  | Jedna sprawa; test fallback v2                           |
+| `operational_feed_agent_runtime.json`           | PR-E: HITL pending, `agent_turns`, EngagementSnapshot.v2 |
+| `ingress_quality_snapshot.json`                 | Jakość bounded ingress (osobny kontekst)                 |
 
 Po edycji `app.js` przejdź fixture w kolejności powyżej (15–30 s każdy). Operator powinien móc odpowiedzieć: _Co dalej? Na czym opiera się sugestia? Czy wykonano? Czy wymaga akceptacji?_
 
 **CSS / `<details>`:** dowody i JSON w rozwinięciu; karty propozycji — Akceptuj/Odrzuć tylko przy `status: proposed` i `proposal_id`.
+
+### HITL agent runtime (PR-E, od 1.3.2)
+
+Przyciski **ZATWIERDŹ** / **WYŚLIJ** w szczegółach sprawy (gdy `hitl_pending` / `hitl_required`):
+
+| Akcja UI  | REST Daszek                          | Efekt                                                                                     |
+| --------- | ------------------------------------ | ----------------------------------------------------------------------------------------- |
+| ZATWIERDŹ | `POST /daszek/v2/agent-hitl/approve` | Proxy → Node B `POST /engagements/{id}/hitl/approve` (CAS snapshot, zdejmuje `hitl_gate`) |
+| WYŚLIJ    | `POST /daszek/v2/agent-hitl/send`    | Wpis w `bridge_queue.jsonl` (`domain: agent_hitl`) → drain Node B                         |
+
+Wymagane env na WP: `DASZEK_NODE_B_API_BASE`, `DASZEK_NODE_B_API_TOKEN` (Bearer do FastAPI Node B). Tylko owner (`konrad`, `darek`) może zatwierdzać HITL.
+
+Fixture smoke: `operational_feed_agent_runtime.json` — sprawa z `hitl_required: true` i sekcją `agent_turns`.
+
+**Proof lokalny (Docker):** `python tools/gmail_audit/scripts/daszek_local_133_proof.py` → `DASZEK_LOCAL_133_PROOF_OK` (patrz §13).
 
 ---
 
@@ -611,17 +657,49 @@ Magazyn: `wp-content/uploads/daszek/v2/operator_case_archive.json`.
 
 ## 13. Weryfikacja, smoke i proof
 
+### Proof 1.3.3 (local Docker — 2026-06-07, PASS)
+
+**Jeden harness** (feed + HITL approve/send + bridge drain + readback):
+
+```powershell
+cd gmail-agent
+$env:PYTHONPATH = "tools\gmail_audit"
+$env:DASZEK_BASE_URL = "http://127.0.0.1:8090"
+python tools/gmail_audit/scripts/daszek_local_133_proof.py
+# oczekiwane: DASZEK_LOCAL_133_PROOF_OK
+```
+
+**Browser (po feedzie):**
+
+```powershell
+python tools/gmail_audit/playwright_daszek_pro_proof.py
+# oczekiwane: DASZEK_PRO_BROWSER_PROOF_OK
+```
+
+**Static gate (CI lustrzane):**
+
+```powershell
+php -l daszek/includes/api-v2.php
+node --check daszek/public/app.js
+python -m pytest gmail-agent/tools/gmail_audit/tests/test_daszek_v3_surface_static.py `
+  gmail-agent/tools/gmail_audit/tests/test_daszek_v3_fixtures.py `
+  gmail-agent/tools/gmail_audit/tests/test_agent_hitl_bridge.py `
+  gmail-agent/tools/gmail_audit/tests/test_daszek_bridge_queue_drain.py -q
+```
+
+Dowód: [`gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md`](gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md), proof pack [`knowledge/artifacts/proof-packs/daszek-1.3.3-local-docker-2026-06-07.md`](knowledge/artifacts/proof-packs/daszek-1.3.3-local-docker-2026-06-07.md).
+
 ### Checklist PRO 100% (must pass)
 
-| #   | Kryterium                | Dowód                                                            |
-| --- | ------------------------ | ---------------------------------------------------------------- |
-| 1   | Plugin **1.3.0** na prod | `daszek_prod_nav_smoke.ps1` → `DASZEK_PROD_NAV_SMOKE_OK`         |
-| 2   | Feed latest z B          | `push_daszek_operational_feed_prod.sh` → 200                     |
-| 3   | Browser proof            | `playwright_daszek_pro_proof.py` → `DASZEK_PRO_BROWSER_PROOF_OK` |
-| 4   | Feedback ≥1 sprawa       | `feedback_eligible: true` (B2)                                   |
-| 5   | Docs                     | `LAST_PROVEN_STATE`, ten plik                                    |
+| #   | Kryterium         | Dowód (lokalnie / prod)                                           |
+| --- | ----------------- | ----------------------------------------------------------------- |
+| 1   | Plugin **1.3.3**  | `app.js?v=1.3.3` w HTML / harness proof                           |
+| 2   | Feed latest z B   | `daszek_local_133_proof.py` lub `push_daszek_local_feed.py` → 200 |
+| 3   | HITL approve/send | `daszek_local_133_proof.py` → `DASZEK_LOCAL_133_PROOF_OK`         |
+| 4   | Browser proof     | `playwright_daszek_pro_proof.py` → `DASZEK_PRO_BROWSER_PROOF_OK`  |
+| 5   | Docs              | `LAST_PROVEN_STATE`, ten plik                                     |
 
-Wymaga `.env`: `DASZEK_BASE_URL`, `DASZEK_LOGIN`, `DASZEK_PASSWORD`.
+Wymaga `.env`: `DASZEK_BASE_URL`, `DASZEK_LOGIN`, `DASZEK_PASSWORD`, tokeny bridge/service.
 
 ### Smoke feed (Node B → A) — pełna checklist
 
@@ -659,11 +737,12 @@ Stdout: `desk_note_preflight`; payload może mieć `warnings`. Prefiks `desk-` (
 
 ### Browser proof harness
 
-| Narzędzie                                          | Cel                                    | Oczekiwany stdout                        |
-| -------------------------------------------------- | -------------------------------------- | ---------------------------------------- |
-| `tools/scripts/daszek_prod_nav_smoke.ps1`          | HTML/JS wersja bez logowania           | `DASZEK_PROD_NAV_SMOKE_OK version=1.3.0` |
-| `tools/gmail_audit/playwright_daszek_pro_proof.py` | PRO L0–L2, brak gateb/BADBAD na biurku | `DASZEK_PRO_BROWSER_PROOF_OK`            |
-| `tools/gmail_audit/playwright_daszek_ui_smoke.py`  | Zrzuty wszystkich widoków              | artefakty w `runs/daszek-*`              |
+| Narzędzie                                             | Cel                                             | Oczekiwany stdout                        |
+| ----------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
+| `tools/scripts/daszek_prod_nav_smoke.ps1`             | HTML/JS wersja bez logowania                    | `DASZEK_PROD_NAV_SMOKE_OK version=1.3.0` |
+| `tools/gmail_audit/playwright_daszek_pro_proof.py`    | PRO L0–L2, brak gateb/BADBAD na biurku          | `DASZEK_PRO_BROWSER_PROOF_OK`            |
+| `tools/gmail_audit/scripts/daszek_local_133_proof.py` | Feed + HITL approve/send + drain (local Docker) | `DASZEK_LOCAL_133_PROOF_OK`              |
+| `tools/gmail_audit/playwright_daszek_ui_smoke.py`     | Zrzuty wszystkich widoków                       | artefakty w `runs/daszek-*`              |
 
 Zasady harness: jawne środowisko (prod/local/fixture); zrzuty + URL/czas; **rozdziel** „widać w UI” od „zapisano w DB”; bez nieuzgodnionych kliknięć produkcyjnych.
 
@@ -780,7 +859,7 @@ Wspólne procedury agenta workspace: [`knowledge/agent-os/`](knowledge/agent-os/
 node --check public/app.js && php -l includes/api-v2.php
 
 # z gmail-agent/
-python -m pytest tools/gmail_audit/tests/test_daszek_v3_surface_static.py tools/gmail_audit/tests/test_daszek_v3_fixtures.py -q
+python -m pytest tools/gmail_audit/tests/test_daszek_v3_surface_static.py tools/gmail_audit/tests/test_daszek_v3_fixtures.py tools/gmail_audit/tests/test_agent_hitl_bridge.py -q
 node --check ../daszek/public/app.js
 ```
 
@@ -795,26 +874,29 @@ node --check ../daszek/public/app.js
 
 ## 17. Luki docelowe (As-Is → To-Be)
 
-| Temat                        | Stan                                 | Docelowo                                 |
-| ---------------------------- | ------------------------------------ | ---------------------------------------- |
-| Jedność PRO vs degradacja v2 | Feed = norma; v2 = awaria            | Zawsze świeży feed; brak listy „legacy”  |
-| Move 5 transport             | v3 feed + v2 push współistnieją na B | Jeden transport projekcji                |
-| Refresh po adjudication      | Częściowy                            | Automatyczny push V3 po każdym reconcile |
-| Archiwum                     | Tylko overlay WP (P1)                | Flaga w feedzie z B                      |
-| Context Projection live      | Bounded proof                        | Operator VPS E2E                         |
-| Cron feed                    | Timer w deploy/systemd               | Rutyna bez ręcznego push                 |
-| D2 Daszek → kalk-top         | RFC draft                            | Poza scope v1 PRO                        |
+| Temat                        | Stan (1.3.3)                                                      | Docelowo                       |
+| ---------------------------- | ----------------------------------------------------------------- | ------------------------------ |
+| Jedność PRO vs degradacja v2 | Feed = norma; UI bez listy v2                                     | Zawsze świeży feed             |
+| Move 5 transport             | v2 push gated przy engagement feed                                | Pełne wycofanie v2 push w prod |
+| Refresh po adjudication/HITL | Push feed po reconcile + HITL approve/send — **proof lokalny OK** | Operator widzi feed po drain   |
+| HITL backend (1.3.2+)        | approve proxy + send bridge + drain — **proof lokalny OK**        | —                              |
+| Archiwum                     | Tylko overlay WP (P1)                                             | Flaga w feedzie z B            |
+| Context Projection live      | Bounded proof lokalny (Skrzat proxy)                              | Operator E2E rozszerzony       |
+| Cron feed                    | Auto-push z workera lokalnie; systemd tylko na VPS historycznym   | —                              |
+| D2 Daszek → kalk-top         | RFC draft                                                         | Poza scope v1 PRO              |
 
 ---
 
 ## 18. Historia wersji pluginu
 
-| Wersja    | Data       | Najważniejsze                                                                                                                                                          |
-| --------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1.3.1** | 2026-06-03 | Panel szczegółów jako modal wyśrodkowany (~70vw×70vh); backdrop pełnoekranowy poza `.workspace`; siatka biurka 2 kolumny (bez stałego paska detail) — commit `8be0303` |
-| **1.3.0** | 2026-05-25 | PRO panel L0–L4; zakładki u góry; feedback; `operator_essence_pl`, `v2_desk_note_id`, `feedback_eligible`; jedna kartka biurka na sprawę; filtr Gate B test            |
-| **1.2.3** | 2026-05-23 | Backdrop panelu szczegółów — nie zasłania treści (`z-index`, `right: var(--daszek-detail-width)`)                                                                      |
-| **1.2.2** | 2026-05-23 | `#refresh-btn`, `bindClick`, archiwum REST, sort spraw chronologicznie, backdrop sidebar                                                                               |
+| Wersja    | Data       | Najważniejsze                                                                                                                                                           |
+| --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1.3.3** | 2026-06-07 | Move 5: brak degradacji v2 w UI Spraw; `DASZEK_NODE_B_SERVICE_TOKEN`; legacy mail cron tylko gdy `mail_ingest`; CI `daszek-static.yml`                                  |
+| **1.3.2** | 2026-06-07 | Backend HITL agent runtime: `POST /agent-hitl/approve` (proxy Node B), `POST /agent-hitl/send` (bridge queue); fixture `operational_feed_agent_runtime.json` w macierzy |
+| **1.3.1** | 2026-06-03 | Panel szczegółów jako modal wyśrodkowany (~70vw×70vh); backdrop pełnoekranowy poza `.workspace`; siatka biurka 2 kolumny (bez stałego paska detail) — commit `8be0303`  |
+| **1.3.0** | 2026-05-25 | PRO panel L0–L4; zakładki u góry; feedback; `operator_essence_pl`, `v2_desk_note_id`, `feedback_eligible`; jedna kartka biurka na sprawę; filtr Gate B test             |
+| **1.2.3** | 2026-05-23 | Backdrop panelu szczegółów — nie zasłania treści (`z-index`, `right: var(--daszek-detail-width)`)                                                                       |
+| **1.2.2** | 2026-05-23 | `#refresh-btn`, `bindClick`, archiwum REST, sort spraw chronologicznie, backdrop sidebar                                                                                |
 
 Starsze: `gmail-agent/memory-bank/agent-handover.md`, `LAST_PROVEN_STATE.md`, proof packs w `knowledge/artifacts/proof-packs/daszek-*.md`.
 

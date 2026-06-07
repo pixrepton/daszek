@@ -16,15 +16,15 @@ function daszek_cron_backup() {
     $source = daszek_tasks_file();
     $backup_name = 'tasks-' . date('Ymd') . '.json';
     $backup_file = DASZEK_DATA_DIR . $backup_name;
-    
+
     if (file_exists($source)) {
         copy($source, $backup_file);
     }
-    
+
     // Rotacja: usuń pliki starsze niż 7 dni
     $files = glob(DASZEK_DATA_DIR . 'tasks-*.json');
     $cutoff = strtotime('-7 days');
-    
+
     foreach ($files as $file) {
         if (filemtime($file) < $cutoff) {
             unlink($file);
@@ -33,23 +33,18 @@ function daszek_cron_backup() {
 }
 
 /**
- * Cron: Mail-Agent (polling co 5 min)
+ * Cron: Mail-Agent (legacy — domyślnie wyłączony).
+ *
+ * Gmail intake = Node B (`gmail-agent`). Nie włączaj `mail_ingest` w produkcji PRO.
+ * Ta ścieżka pozostaje tylko dla historycznych testów IMAP na Node A.
  */
 function daszek_cron_mail_ingest() {
     $config = daszek_get_config();
-    
+
     if (!$config['mail_ingest']) {
         return;
     }
-    
-    // TODO: Implementacja IMAP polling + reguły + LLM
-    // To jest placeholder - pełna implementacja Mail-Agent wymaga:
-    // 1. Połączenie IMAP
-    // 2. Pobranie nowych wiadomości
-    // 3. Parsowanie treści + załączników (OCR)
-    // 4. Ekstrakcja danych (Groq AI)
-    // 5. Utworzenie zadań
-    
+
     try {
         daszek_process_mailbox();
     } catch (Exception $e) {
@@ -62,11 +57,11 @@ function daszek_cron_mail_ingest() {
  */
 function daszek_process_mailbox() {
     $config = daszek_get_config();
-    
+
     if (!$config['mail_ingest'] || !$config['imap']['host']) {
         return;
     }
-    
+
     // Połączenie IMAP
     $mailbox = sprintf(
         '{%s:%d/imap%s}INBOX',
@@ -74,52 +69,52 @@ function daszek_process_mailbox() {
         $config['imap']['port'],
         $config['imap']['ssl'] ? '/ssl' : ''
     );
-    
+
     $imap = @imap_open(
         $mailbox,
         $config['imap']['user'],
         $config['imap']['pass']
     );
-    
+
     if (!$imap) {
         error_log('Daszek: Nie można połączyć z IMAP');
         return;
     }
-    
+
     // Pobierz nieprzeczytane wiadomości
     $emails = imap_search($imap, 'UNSEEN');
-    
+
     if (!$emails) {
         imap_close($imap);
         return;
     }
-    
+
     foreach ($emails as $email_number) {
         $overview = imap_fetch_overview($imap, $email_number, 0);
         $message = imap_fetchbody($imap, $email_number, 1);
-        
+
         if (!$overview) {
             continue;
         }
-        
+
         $subject = $overview[0]->subject ?? '';
         $from = $overview[0]->from ?? '';
-        
+
         // Proste reguły rozpoznawania
         $keywords = ['faktura', 'invoice', 'opłata', 'płatność', 'serwis', 'przegląd'];
         $has_keyword = false;
-        
+
         foreach ($keywords as $keyword) {
             if (stripos($subject, $keyword) !== false || stripos($message, $keyword) !== false) {
                 $has_keyword = true;
                 break;
             }
         }
-        
+
         if (!$has_keyword) {
             continue;
         }
-        
+
         // Ekstrakcja daty (prosta regex dd.mm.yyyy lub dd-mm-yyyy)
         $due_date = null;
         if (preg_match('/(\d{2})[.\-\/](\d{2})[.\-\/](\d{4})/', $message, $matches)) {
@@ -128,7 +123,7 @@ function daszek_process_mailbox() {
             // Domyślnie: +7 dni
             $due_date = date('Y-m-d', strtotime('+7 days'));
         }
-        
+
         // Jeśli włączone Groq, użyj AI do ekstrakcji
         if ($config['groq']['enabled']) {
             $extracted = daszek_extract_with_groq($subject, $message);
@@ -136,7 +131,7 @@ function daszek_process_mailbox() {
                 $due_date = $extracted['due_date'];
             }
         }
-        
+
         // Utwórz zadanie
         $task_data = [
             'title' => substr($subject, 0, 200),
@@ -144,15 +139,15 @@ function daszek_process_mailbox() {
             'source' => 'mail',
             'amount' => null,
         ];
-        
+
         // Nadpisz użytkownika na 'daszek'
         $_SESSION['daszek_user'] = 'daszek';
         daszek_add_task($task_data);
-        
+
         // Oznacz jako przeczytane
         imap_setflag_full($imap, $email_number, "\\Seen");
     }
-    
+
     imap_close($imap);
 }
 
@@ -161,11 +156,11 @@ function daszek_process_mailbox() {
  */
 function daszek_extract_with_groq($subject, $body) {
     $config = daszek_get_config();
-    
+
     if (!$config['groq']['enabled'] || !$config['groq']['api_key']) {
         return null;
     }
-    
+
     $prompt = "Jesteś asystentem analizującym maile firmowe. Z poniższego maila wyodrębnij:\n" .
               "- has_task (bool): czy mail zawiera zadanie do wykonania?\n" .
               "- title (string): krótki tytuł zadania\n" .
@@ -173,7 +168,7 @@ function daszek_extract_with_groq($subject, $body) {
               "- amount (number lub null): kwota jeśli występuje\n\n" .
               "Zwróć tylko czysty JSON.\n\n" .
               "Temat: {$subject}\n\nTreść: {$body}";
-    
+
     $data = [
         'model' => $config['groq']['model'],
         'messages' => [
@@ -183,7 +178,7 @@ function daszek_extract_with_groq($subject, $body) {
         'temperature' => 0.2,
         'response_format' => ['type' => 'json_object'],
     ];
-    
+
     $ch = curl_init('https://api.groq.com/openai/v1/chat/completions');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
@@ -192,18 +187,17 @@ function daszek_extract_with_groq($subject, $body) {
         'Content-Type: application/json',
         'Authorization: Bearer ' . $config['groq']['api_key'],
     ]);
-    
+
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
-    
+
     if ($http_code !== 200) {
         return null;
     }
-    
+
     $result = json_decode($response, true);
     $content = $result['choices'][0]['message']['content'] ?? '{}';
-    
+
     return json_decode($content, true);
 }
-

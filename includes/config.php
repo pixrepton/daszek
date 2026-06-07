@@ -30,10 +30,6 @@ function daszek_get_config() {
             'api_key' => '',
             'model'   => 'llama-3.1-8b-instant',
         ],
-        'deepseek_ocr' => [
-            'enabled' => false,
-            'url'     => '',
-        ],
         // When true, POST operational feed snapshot fails if feed.desk references unknown note_id in v2 desk_notes.
         'operational_feed' => [
             'strict_desk_note_refs' => false,
@@ -43,6 +39,7 @@ function daszek_get_config() {
         'node_b_api' => [
             'base_url' => defined('DASZEK_NODE_B_API_BASE') ? DASZEK_NODE_B_API_BASE : (getenv('DASZEK_NODE_B_API_BASE') ?: ''),
             'api_token' => defined('DASZEK_NODE_B_API_TOKEN') ? DASZEK_NODE_B_API_TOKEN : (getenv('DASZEK_NODE_B_API_TOKEN') ?: ''),
+            'service_token' => defined('DASZEK_NODE_B_SERVICE_TOKEN') ? DASZEK_NODE_B_SERVICE_TOKEN : (getenv('DASZEK_NODE_B_SERVICE_TOKEN') ?: ''),
             'timeout' => 20,
         ],
     ];

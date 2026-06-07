@@ -101,6 +101,18 @@ function daszek_api_register_v2_routes() {
         'permission_callback' => 'daszek_check_auth',
     ]);
 
+    register_rest_route($namespace, '/agent-hitl/approve', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_agent_hitl_approve',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/agent-hitl/send', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_agent_hitl_send',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
     // Node B bridge: GET accepts optional query params `status` (default pending) and `limit` (max 100).
     // Do not require desk/case shape here — those fields belong to ingest/read models, not queue listing.
     register_rest_route($namespace, '/bridge-queue', [
@@ -635,6 +647,103 @@ function daszek_api_v2_append_action_decision(WP_REST_Request $request, $decisio
     return ['ok' => true, 'queued' => $row];
 }
 
+function daszek_api_v2_agent_hitl_request_payload(WP_REST_Request $request) {
+    $payload = daszek_request_payload($request);
+    if (!is_array($payload)) {
+        return new WP_Error('invalid_payload', 'Payload musi byc obiektem JSON.', ['status' => 400]);
+    }
+    $engagement_id = isset($payload['engagement_id']) ? sanitize_text_field($payload['engagement_id']) : '';
+    $action_id = isset($payload['action_id']) ? sanitize_text_field($payload['action_id']) : 'draft_reply';
+    $case_id = isset($payload['case_id']) ? sanitize_text_field($payload['case_id']) : '';
+    $operator_id = isset($payload['operator_id']) ? sanitize_text_field($payload['operator_id']) : '';
+    if ($engagement_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane engagement_id.', ['status' => 400]);
+    }
+    if ($action_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane action_id.', ['status' => 400]);
+    }
+    if ($operator_id === '') {
+        $actor = daszek_current_user();
+        $operator_id = is_string($actor) ? sanitize_text_field($actor) : 'operator';
+    }
+    return [
+        'engagement_id' => $engagement_id,
+        'action_id' => $action_id,
+        'case_id' => $case_id,
+        'operator_id' => $operator_id,
+    ];
+}
+
+function daszek_api_v2_agent_hitl_approve(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    $owner_check = daszek_api_v2_require_owner();
+    if (is_wp_error($owner_check)) {
+        return $owner_check;
+    }
+
+    $parsed = daszek_api_v2_agent_hitl_request_payload($request);
+    if (is_wp_error($parsed)) {
+        return $parsed;
+    }
+
+    $result = daszek_node_b_get_json(
+        '/engagements/' . rawurlencode($parsed['engagement_id']) . '/hitl/approve',
+        'POST',
+        [
+            'action_id' => $parsed['action_id'],
+            'operator_id' => $parsed['operator_id'],
+            'case_id' => $parsed['case_id'],
+        ]
+    );
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    if (empty($result['ok'])) {
+        $message = isset($result['error']) ? sanitize_text_field((string) $result['error']) : 'Node B odrzucil HITL approve.';
+        return new WP_Error('hitl_approve_failed', $message, ['status' => 502, 'detail' => $result]);
+    }
+    return $result;
+}
+
+function daszek_api_v2_agent_hitl_send(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    $owner_check = daszek_api_v2_require_owner();
+    if (is_wp_error($owner_check)) {
+        return $owner_check;
+    }
+    if (!daszek_v2_bootstrap_storage()) {
+        return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
+    }
+
+    $parsed = daszek_api_v2_agent_hitl_request_payload($request);
+    if (is_wp_error($parsed)) {
+        return $parsed;
+    }
+
+    $row = [
+        'queue_id' => 'bq_' . substr(hash('sha256', $parsed['engagement_id'] . '|send|' . microtime(true)), 0, 24),
+        'schema_version' => 'daszek_bridge_queue.v1',
+        'domain' => 'agent_hitl',
+        'adjudication_kind' => 'hitl_action_execute',
+        'bridge_status' => 'pending',
+        'engagement_id' => $parsed['engagement_id'],
+        'case_id' => $parsed['case_id'],
+        'action_id' => $parsed['action_id'],
+        'operator_id' => $parsed['operator_id'],
+        'created_at' => gmdate('c'),
+    ];
+    if (!daszek_v2_append_jsonl_store('bridge_queue', $row)) {
+        return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
+    }
+    return ['ok' => true, 'queued' => $row];
+}
+
 function daszek_api_v2_note_feedback(WP_REST_Request $request) {
     $csrf_check = daszek_check_csrf($request);
     if (is_wp_error($csrf_check)) {
@@ -680,6 +789,33 @@ function daszek_bridge_request_token(WP_REST_Request $request) {
     return '';
 }
 
+function daszek_node_b_service_token() {
+    if (defined('DASZEK_NODE_B_SERVICE_TOKEN') && is_string(DASZEK_NODE_B_SERVICE_TOKEN) && trim(DASZEK_NODE_B_SERVICE_TOKEN) !== '') {
+        return trim(DASZEK_NODE_B_SERVICE_TOKEN);
+    }
+
+    $env_token = getenv('DASZEK_NODE_B_SERVICE_TOKEN');
+    if (is_string($env_token) && trim($env_token) !== '') {
+        return trim($env_token);
+    }
+
+    return '';
+}
+
+function daszek_check_node_b_service_token(WP_REST_Request $request) {
+    $expected = daszek_node_b_service_token();
+    if ($expected === '') {
+        return new WP_Error('service_token_not_configured', 'Node B service token is not configured.', ['status' => 503]);
+    }
+
+    $provided = daszek_bridge_request_token($request);
+    if ($provided === '' || !hash_equals($expected, $provided)) {
+        return new WP_Error('unauthorized_service', 'Invalid Node B service token.', ['status' => 401]);
+    }
+
+    return true;
+}
+
 function daszek_check_bridge_token(WP_REST_Request $request) {
     $expected = daszek_bridge_api_token();
     if ($expected === '') {
@@ -695,10 +831,16 @@ function daszek_check_bridge_token(WP_REST_Request $request) {
 }
 
 /**
- * POST ingress-quality snapshot: prefer bridge token when configured (Node B),
- * otherwise operator session + CSRF. TODO: dedicated service identity for Node B only.
+ * POST ingress-quality / operational-feed snapshots:
+ * 1) DASZEK_NODE_B_SERVICE_TOKEN (dedicated Node B push identity)
+ * 2) DASZEK_BRIDGE_TOKEN (legacy bridge)
+ * 3) operator session + CSRF (manual dev)
  */
 function daszek_check_ingress_quality_snapshot_write(WP_REST_Request $request) {
+    if (daszek_node_b_service_token() !== '') {
+        return daszek_check_node_b_service_token($request);
+    }
+
     $expected = daszek_bridge_api_token();
     if ($expected !== '') {
         return daszek_check_bridge_token($request);
@@ -750,12 +892,18 @@ function daszek_v2_bridge_queue_pending_rows($rows) {
         }
 
         $domain = isset($row['domain']) ? sanitize_text_field($row['domain']) : '';
-        if (!in_array($domain, ['adjudication', 'action_decision'], true)) {
+        if (!in_array($domain, ['adjudication', 'action_decision', 'agent_hitl'], true)) {
             continue;
         }
         if ($domain === 'adjudication') {
             $kind = isset($row['adjudication_kind']) ? sanitize_text_field($row['adjudication_kind']) : '';
             if ($kind !== 'reject_same_case') {
+                continue;
+            }
+        }
+        if ($domain === 'agent_hitl') {
+            $kind = isset($row['adjudication_kind']) ? sanitize_text_field($row['adjudication_kind']) : '';
+            if ($kind !== 'hitl_action_execute') {
                 continue;
             }
         }

@@ -2,14 +2,14 @@
 /**
  * Plugin Name: Daszek
  * Description: System zarzadzania zadaniami i itemami intake dla TOP-INSTAL
- * Version: 1.3.1
+ * Version: 1.3.3
  * Author: TOP-INSTAL
  * Text Domain: daszek
  */
 
 if (!defined('ABSPATH')) exit;
 
-define('DASZEK_VERSION', '1.3.1');
+define('DASZEK_VERSION', '1.3.3');
 define('DASZEK_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('DASZEK_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('DASZEK_DATA_DIR', WP_CONTENT_DIR . '/uploads/daszek/');
@@ -49,8 +49,13 @@ function daszek_activate() {
         wp_schedule_event(time(), 'daily', 'daszek_daily_backup');
     }
 
-    if (!wp_next_scheduled('daszek_mail_ingest')) {
-        wp_schedule_event(time(), 'daszek_5min', 'daszek_mail_ingest');
+    $config = daszek_get_config();
+    if (!empty($config['mail_ingest'])) {
+        if (!wp_next_scheduled('daszek_mail_ingest')) {
+            wp_schedule_event(time(), 'daszek_5min', 'daszek_mail_ingest');
+        }
+    } else {
+        wp_clear_scheduled_hook('daszek_mail_ingest');
     }
 }
 

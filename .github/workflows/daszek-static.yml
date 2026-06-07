@@ -1,0 +1,19 @@
+name: daszek-static
+
+on:
+  push:
+    paths:
+      - "**"
+  pull_request:
+
+jobs:
+  daszek-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP syntax (api-v2)
+        run: php -l includes/api-v2.php
+
+      - name: Node syntax (app.js)
+        run: node --check public/app.js

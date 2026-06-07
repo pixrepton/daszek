@@ -2510,32 +2510,13 @@ function renderCasesView() {
     }
 
     if (!hasOperationalFeedSnapshot()) {
-        const legacyItems = sortCasesChronologically((state.data.cases.items || []).filter(item => {
-            if (isCaseArchived(item.case_id)) {
-                return false;
-            }
-            return matchesSearch([
-                item.title,
-                item.summary,
-                item.operator_brief_pl,
-                item.primary_next_action_title_pl,
-                item.family_label || item.family,
-                item.case_id,
-            ]);
-        }));
-        if (!legacyItems.length) {
-            root.innerHTML = wrapOperationalViewShell('Sprawy', `
-                <section class="empty-state ds-state">
-                    <h3>Brak aktywnych spraw</h3>
-                    <p>Brak zasilenia operational feed i pusta warstwa v2 — wgraj migawkę Node B lub poczekaj na ingest.</p>
-                </section>
-            `);
-            return;
-        }
+        const msg = op.message ? escapeHtml(String(op.message)) : 'Operational feed nie został jeszcze zapisany w Daszek V3.';
         root.innerHTML = wrapOperationalViewShell('Sprawy', `
-            <p class="detail-muted cases-sort-hint">Warstwa v2 (legacy) — sortowanie od najnowszej aktywności.</p>
-            <section class="operational-list">
-                ${legacyItems.map(item => renderOperationalCaseRecord(item)).join('')}
+            <section class="empty-state ds-state">
+                <h3>Brak zasilenia spraw z Node B</h3>
+                <p>${msg}</p>
+                <p class="detail-muted">Docelowy widok PRO czyta wyłącznie operational feed V3. Uruchom eksporter <code>daszek_v3_operational_feed.py</code> i wyślij snapshot (service token / bridge token).</p>
+                ${projectionBoundaryHtml()}
             </section>
         `);
         return;
@@ -3366,12 +3347,59 @@ function renderOperationalTimeline(items) {
     if (!items || !items.length) {
         return '<p class="detail-muted">Brak wpisów w dzienniku operacyjnym (zapis pojawi się po kolejnych zdarzeniach systemu).</p>';
     }
-    return `<ol class="detail-timeline">${items.map(ev => `
+    return `<ol class="detail-timeline">${items.map(ev => {
+        const row = ev || {};
+        const when = row.occurred_at || row.at || '';
+        const label = row.event_type_label || row.event_type || row.kind || row.tool_name || '';
+        return `
         <li>
-            <div class="timeline-meta">${escapeHtml((ev || {}).occurred_at || '')} · ${escapeHtml((ev || {}).event_type_label || (ev || {}).event_type || '')}</div>
-            <div>${escapeHtml((ev || {}).summary_pl || '')}</div>
-        </li>
-    `).join('')}</ol>`;
+            <div class="timeline-meta">${escapeHtml(when)} · ${escapeHtml(label)}</div>
+            <div>${escapeHtml(row.summary_pl || '')}</div>
+        </li>`;
+    }).join('')}</ol>`;
+}
+
+function renderHitlOperatorActions(caseItem, payload) {
+    const row = caseItem || {};
+    const hitlPending = Boolean(
+        row.hitl_pending
+        || row.hitl_required
+        || (payload && payload.hitl_pending)
+        || (payload && payload.hitl_gate && payload.hitl_gate.required)
+    );
+    if (!hitlPending) {
+        return '';
+    }
+    const engagementId = String(row.engagement_id || (payload && payload.engagement_id) || '').trim();
+    const caseId = String(row.case_id || (payload && payload.case_id) || '').trim();
+    const actionId = 'draft_reply';
+    return `
+        <section class="detail-section detail-section-intelligence">
+            <h3>Decyzja operatora (HITL)</h3>
+            <p class="detail-muted">Draft jest gotowy technicznie — wysyłka wymaga zatwierdzenia.</p>
+            <div class="feedback-grid">
+                <button type="button" class="btn btn-primary btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}">ZATWIERDŹ</button>
+                <button type="button" class="btn btn-secondary btn-small" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}">WYŚLIJ</button>
+            </div>
+        </section>`;
+}
+
+function renderAgentTurnsSection(turns) {
+    if (!Array.isArray(turns) || !turns.length) {
+        return '';
+    }
+    return `
+        <section class="detail-section detail-section-intelligence">
+            <h3>Agent HVAC (ostatnie kroki)</h3>
+            <ol class="detail-timeline">${turns.map(t => {
+        const row = t || {};
+        const tool = String(row.tool_name || '').trim();
+        const summary = String(row.turn_summary_pl || row.tool_status || '').trim();
+        const tokens = Number(row.tokens_used || 0);
+        const meta = tokens > 0 ? ` · ${tokens} tokenów` : '';
+        return `<li><div class="timeline-meta">${escapeHtml(tool || 'narzędzie')}${escapeHtml(meta)}</div><div>${escapeHtml(summary)}</div></li>`;
+    }).join('')}</ol>
+        </section>`;
 }
 
 function renderAutomationPolicy(policy) {
@@ -4326,6 +4354,9 @@ function renderDetailPanel() {
                 ${docHtml}
             </section>`}
 
+            ${renderHitlOperatorActions(caseItem, payload)}
+            ${renderAgentTurnsSection(payload.agent_turns)}
+
             ${timeline.length ? `
             <section class="detail-section detail-section-intelligence">
                 <h3>Dziennik operacyjny</h3>
@@ -4398,6 +4429,35 @@ async function sendFeedback(noteId, action, extra = {}) {
         }
     } catch (error) {
         showError(error.message);
+    }
+}
+
+async function submitHitlAgentAction(trigger, kind) {
+    const engagementId = String(trigger.dataset.hitlApprove || trigger.dataset.hitlSend || '').trim();
+    const caseId = String(trigger.dataset.hitlCase || '').trim();
+    const actionId = String(trigger.dataset.hitlAction || 'draft_reply').trim();
+    if (!engagementId) {
+        showError('Brak engagement_id — odśwież szczegóły sprawy.');
+        return;
+    }
+    const endpoint = kind === 'send' ? '/agent-hitl/send' : '/agent-hitl/approve';
+    try {
+        await apiFetch(V2_API_BASE, endpoint, {
+            method: 'POST',
+            body: JSON.stringify({
+                engagement_id: engagementId,
+                case_id: caseId,
+                action_id: actionId,
+                operator_id: state.currentUser || 'operator',
+            }),
+        });
+        showToast(kind === 'send' ? 'Wysyłka zapisana w kolejce bridge.' : 'HITL zatwierdzone — odświeżam widok.');
+        await loadAllData();
+        if (caseId) {
+            await openCaseDetail(caseId);
+        }
+    } catch (error) {
+        showError(error.message || 'Nie udało się zapisać decyzji HITL (sprawdź bridge / MCP).');
     }
 }
 
@@ -4592,6 +4652,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const detailPanel = document.getElementById('detail-panel');
     if (detailPanel) {
         detailPanel.addEventListener('click', event => {
+            const hitlApprove = event.target.closest('[data-hitl-approve]');
+            if (hitlApprove) {
+                void submitHitlAgentAction(hitlApprove, 'approve');
+                return;
+            }
+            const hitlSend = event.target.closest('[data-hitl-send]');
+            if (hitlSend) {
+                void submitHitlAgentAction(hitlSend, 'send');
+                return;
+            }
             const retryTrigger = event.target.closest('[data-retry-detail]');
             if (retryTrigger) {
                 const mode = retryTrigger.dataset.retryDetail;

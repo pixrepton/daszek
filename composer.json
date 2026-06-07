@@ -1,8 +1,8 @@
 {
     "name": "topinstal/daszek",
-    "description": "System zarządzania zadaniami firmowymi dla TOP-INSTAL",
+    "description": "Panel operatora PRO TOP-INSTAL (Node A) — operational feed V3, bridge, HITL",
     "type": "wordpress-plugin",
-    "version": "1.0.0",
+    "version": "1.3.3",
     "license": "proprietary",
     "authors": [
         {
@@ -18,17 +18,18 @@
             "includes/config.php",
             "includes/auth.php",
             "includes/store.php",
-            "includes/cycles.php",
+            "includes/store-v2.php",
+            "includes/store-v3.php",
             "includes/api.php",
+            "includes/api-v2.php",
             "includes/cron.php"
         ]
     },
     "keywords": [
         "wordpress",
         "plugin",
-        "tasks",
-        "management",
-        "todo"
+        "daszek",
+        "operator",
+        "top-instal"
     ]
 }
-

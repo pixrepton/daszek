@@ -1,0 +1,102 @@
+{
+  "schema_name": "daszek_operational_feed_snapshot",
+  "schema_version": "1",
+  "snapshot_id": "fixture-agent-runtime-1",
+  "created_at": "2026-06-04T12:00:00Z",
+  "generated_at": "2026-06-04T12:00:00Z",
+  "title": "Operational feed (agent runtime HITL)",
+  "read_only": true,
+  "creates_cases": false,
+  "executes_actions": false,
+  "subtitle": "Fixture PR-E — EngagementSnapshot.v2 (agent runtime)",
+  "source": {
+    "feed_source": "engagement_snapshot_v2",
+    "exporter": "gmail-agent.tools.gmail_audit.daszek_engagement_feed"
+  },
+  "counts": {
+    "desk": 1,
+    "cases": 1,
+    "tasks": 1
+  },
+  "feed": {
+    "schema_version": "2",
+    "desk": [
+      {
+        "note_id": "desk-eng-fix-1",
+        "case_id": "agent-case-radlin-1",
+        "engagement_id": "eng-fix-1",
+        "title": "Radlin — 128 m²",
+        "summary_pl": "Draft odpowiedzi — oczekuje operatora (HITL).",
+        "presence_mode": "advisory",
+        "lifecycle": "active",
+        "status": "pending_operator",
+        "hitl_required": true,
+        "hitl_reason": "agent_stopped",
+        "source_signal_ids": [
+          "sig-fix-1"
+        ]
+      }
+    ],
+    "cases": [
+      {
+        "case_id": "agent-case-radlin-1",
+        "engagement_id": "eng-fix-1",
+        "title": "Radlin — 128 m²",
+        "summary_pl": "Draft odpowiedzi — oczekuje operatora (HITL).",
+        "status": "pending_operator",
+        "business_area": "operations",
+        "business_priority": "high",
+        "operator_attention_class": "hitl_required",
+        "heated_area_m2": 128,
+        "city": "Radlin",
+        "agent_snapshot_version": 2
+      }
+    ],
+    "tasks": [
+      {
+        "task_id": "task-eng-fix-1-draft_reply",
+        "title": "Akcja: draft_reply",
+        "summary": "Propozycja odpowiedzi do klienta (wymaga zatwierdzenia).",
+        "linked_case_id": "agent-case-radlin-1",
+        "source_type": "agent_action",
+        "status": "pending_approval",
+        "requires_approval": true
+      }
+    ],
+    "case_details": {
+      "agent-case-radlin-1": {
+        "ok": true,
+        "view": "case_detail_agent_runtime",
+        "case_id": "agent-case-radlin-1",
+        "engagement_id": "eng-fix-1",
+        "agent_turns": [
+          {
+            "turn_id": "t1",
+            "tool_name": "extract_facts_from_text",
+            "tool_status": "ok",
+            "turn_summary_pl": "Wyciągnięto 128 m², Radlin.",
+            "tokens_used": 42,
+            "snapshot_version": 2
+          }
+        ],
+        "operational_timeline": [
+          {
+            "occurred_at": "2026-06-04T12:00:00Z",
+            "event_type": "agent_turn",
+            "event_type_label": "Agent: extract_facts_from_text",
+            "summary_pl": "Wyciągnięto 128 m², Radlin."
+          }
+        ],
+        "hitl_gate": {
+          "required": true,
+          "reason": "agent_stopped"
+        }
+      }
+    },
+    "feed_meta": {
+      "feed_schema_version": "2",
+      "agent_runtime": true,
+      "exporter": "gmail-agent.tools.gmail_audit.daszek_engagement_feed"
+    }
+  }
+}
