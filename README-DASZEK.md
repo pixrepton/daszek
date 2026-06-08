@@ -92,7 +92,7 @@ flowchart TB
 | Węzeł      | Compose                                                                                | URL z hosta             | Rola                             |
 | ---------- | -------------------------------------------------------------------------------------- | ----------------------- | -------------------------------- |
 | **Node A** | [`docker-compose.daszek-local.yml`](docker-compose.daszek-local.yml)                   | `http://127.0.0.1:8090` | WP + plugin [`daszek/`](daszek/) |
-| **Node B** | [`gmail-agent/docker-compose.local-vps.yml`](gmail-agent/docker-compose.local-vps.yml) | `http://127.0.0.1:8765` | API, worker, Postgres `:54329`   |
+| **Node B** | [`gmail-agent/docker-compose.local-vps.yml`](gmail-agent/docker-compose.local-vps.yml) | `http://127.0.0.1:8766` | API, worker, Postgres `:54329` (`GMAIL_AGENT_NODEB_PORT`) |
 
 **Start (skrót):**
 
@@ -107,7 +107,7 @@ docker compose --env-file .env.vps -f docker-compose.local-vps.yml --profile wor
 
 **Env lokalne (gitignored):** `.env.daszek-local` (tokeny WP), `gmail-agent/.env.local-vps` (aplikacja w kontenerze), `gmail-agent/tools/gmail_audit/.env` (CLI/pytest).
 
-WP w Dockerze widzi Node B jako `http://host.docker.internal:8765` (`WORDPRESS_CONFIG_EXTRA` w compose). Node B pushuje feed na `http://host.docker.internal:8090`.
+WP w Dockerze widzi Node B jako `http://host.docker.internal:8766` (`WORDPRESS_CONFIG_EXTRA` w compose; port z `GMAIL_AGENT_NODEB_PORT`). Node B pushuje feed na `http://host.docker.internal:8090`.
 
 Po zmianach w kodzie Node B: `docker compose ... build gmail-agent-nodeb-api gmail-agent-worker` + recreate kontenerów (obraz **nie** mountuje źródeł — tylko `.env`).
 
