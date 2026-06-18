@@ -801,6 +801,111 @@ select:focus {
     background: var(--paper);
 }
 
+.os-event-list {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.os-event-row {
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.45rem 0.6rem;
+    background: var(--paper, #fff);
+}
+
+.os-event-row.is-warning {
+    border-color: #f59e0b;
+}
+
+.os-event-row.is-error {
+    border-color: #dc2626;
+}
+
+.os-event-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    font-size: var(--font-sm, 0.82rem);
+    color: var(--muted, #64748b);
+}
+
+.os-event-summary {
+    margin: 0.25rem 0 0;
+    font-size: 0.9rem;
+}
+
+.os-event-repo {
+    font-size: 0.72rem;
+}
+
+.os-event-engagement {
+    margin: 0.15rem 0 0;
+    font-size: 0.78rem;
+}
+
+.system-health-strip {
+    margin-bottom: 1.25rem;
+    padding: 1rem 1.1rem;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--paper-strong);
+}
+
+.system-health-strip.is-ok {
+    border-color: #86efac;
+}
+
+.system-health-strip.is-warning {
+    border-color: #fcd34d;
+}
+
+.system-health-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.system-health-head h4 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.system-health-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem 1rem;
+    margin: 0;
+}
+
+.system-health-metrics div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.system-health-metrics dt {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--muted);
+}
+
+.system-health-metrics dd {
+    margin: 0;
+    font-weight: 600;
+}
+
+.system-health-meta {
+    margin: 0.75rem 0 0;
+    font-size: 0.8rem;
+}
+
 .guidance-meta,
 .guidance-compact {
     display: flex;
@@ -1953,4 +2058,166 @@ body.detail-panel--open .detail-shell {
     .screen-main .workspace {
         grid-template-columns: 1fr;
     }
+}
+
+/* ── Redesign: nagłówek maila na kartach (nadawca / data / załączniki) ── */
+.record-mailmeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    margin: var(--space-2) 0 var(--space-3);
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+}
+
+.record-mailmeta .mailmeta-from {
+    font-weight: 600;
+    color: var(--ink);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.record-mailmeta .mailmeta-when::before {
+    content: "· ";
+    color: var(--text-muted);
+}
+
+.record-mailmeta .mailmeta-attach {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+/* ── Chipy załączników ── */
+.attachment-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    font-size: var(--font-sm);
+    color: var(--ink);
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+button.attachment-chip--preview {
+    cursor: pointer;
+}
+
+button.attachment-chip--preview:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* ── Nagłówek maila w panelu szczegółów ── */
+.detail-mail-header {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3) 0;
+    margin-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.detail-mail-row {
+    display: flex;
+    gap: var(--space-3);
+    font-size: var(--font-md);
+}
+
+.detail-mail-key {
+    flex: 0 0 4rem;
+    color: var(--text-muted);
+}
+
+.detail-mail-val {
+    color: var(--ink);
+    word-break: break-word;
+}
+
+/* ── Sekcja załączników w panelu ── */
+.attachment-item {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    margin-top: var(--space-2);
+    background: var(--surface-raised);
+}
+
+.attachment-item summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.attachment-item .attachment-kind {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: var(--font-sm);
+}
+
+.attachment-preview {
+    margin: var(--space-2) 0 0;
+    font-size: var(--font-md);
+    color: var(--ink);
+    white-space: pre-wrap;
+}
+
+.attachment-item--plain {
+    color: var(--ink);
+}
+
+/* ── Sprawy jako rejestr / szukajka ── */
+.registry-header {
+    margin-bottom: var(--space-3);
+}
+
+.registry-header-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.registry-count {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    font-size: var(--font-md);
+}
+
+/* ── Oś odpowiedzi (HITL) jako główne CTA ── */
+.detail-section-reply {
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    background: var(--accent-soft);
+}
+
+.hitl-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+/* ── Oś oceny jakości AI ── */
+.detail-section-quality .feedback-grid--primary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin: var(--space-2) 0;
 }

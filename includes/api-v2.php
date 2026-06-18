@@ -203,6 +203,30 @@ function daszek_api_register_v3_routes() {
         'permission_callback' => 'daszek_check_operational_feed_snapshot_write',
     ]);
 
+    register_rest_route($namespace, '/system-health-snapshots/latest', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_health_snapshot_latest',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system-health-snapshots/(?P<id>[a-zA-Z0-9_:-]+)', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_health_snapshot_detail',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system-health-snapshots', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_health_snapshots_list',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system-health-snapshots', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v3_system_health_snapshot_ingest',
+        'permission_callback' => 'daszek_check_system_health_snapshot_write',
+    ]);
+
     register_rest_route($namespace, '/cases/(?P<id>[a-zA-Z0-9_:-]+)/skrzat/ask', [
         'methods' => 'POST',
         'callback' => 'daszek_api_v3_skrzat_ask',
@@ -215,9 +239,21 @@ function daszek_api_register_v3_routes() {
         'permission_callback' => 'daszek_check_auth',
     ]);
 
-    register_rest_route($namespace, '/engagements/(?P<id>[a-zA-Z0-9:-]+)/snapshot', [
+    register_rest_route($namespace, '/engagements/(?P<id>[a-zA-Z0-9_:-]+)/snapshot', [
         'methods' => 'GET',
         'callback' => 'daszek_api_v3_engagement_snapshot',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/engagements/(?P<id>[a-zA-Z0-9_:-]+)/os-events', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_engagement_os_events',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system/os-events/recent', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_os_events_recent',
         'permission_callback' => 'daszek_check_auth',
     ]);
 }
@@ -284,6 +320,42 @@ function daszek_api_v3_engagement_snapshot(WP_REST_Request $request) {
         return new WP_Error('invalid_payload', 'Wymagane engagement_id.', ['status' => 400]);
     }
     $result = daszek_node_b_get_json('/engagements/' . rawurlencode($engagement_id) . '/snapshot');
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_engagement_os_events(WP_REST_Request $request) {
+    $engagement_id = sanitize_text_field($request->get_param('id'));
+    if ($engagement_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane engagement_id.', ['status' => 400]);
+    }
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    if ($limit > 200) {
+        $limit = 200;
+    }
+    $path = '/engagements/' . rawurlencode($engagement_id) . '/os-events?limit=' . $limit;
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_os_events_recent(WP_REST_Request $request) {
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    if ($limit > 200) {
+        $limit = 200;
+    }
+    $path = '/system/os-events/recent?limit=' . $limit;
+    $result = daszek_node_b_get_json($path);
     if (is_wp_error($result)) {
         return $result;
     }
@@ -666,11 +738,13 @@ function daszek_api_v2_agent_hitl_request_payload(WP_REST_Request $request) {
         $actor = daszek_current_user();
         $operator_id = is_string($actor) ? sanitize_text_field($actor) : 'operator';
     }
+    $draft_pl = isset($payload['draft_pl']) ? sanitize_textarea_field($payload['draft_pl']) : '';
     return [
         'engagement_id' => $engagement_id,
         'action_id' => $action_id,
         'case_id' => $case_id,
         'operator_id' => $operator_id,
+        'draft_pl' => $draft_pl,
     ];
 }
 
@@ -696,6 +770,7 @@ function daszek_api_v2_agent_hitl_approve(WP_REST_Request $request) {
             'action_id' => $parsed['action_id'],
             'operator_id' => $parsed['operator_id'],
             'case_id' => $parsed['case_id'],
+            'operator_draft_pl' => $parsed['draft_pl'],
         ]
     );
     if (is_wp_error($result)) {
@@ -736,6 +811,7 @@ function daszek_api_v2_agent_hitl_send(WP_REST_Request $request) {
         'case_id' => $parsed['case_id'],
         'action_id' => $parsed['action_id'],
         'operator_id' => $parsed['operator_id'],
+        'operator_draft_pl' => $parsed['draft_pl'],
         'created_at' => gmdate('c'),
     ];
     if (!daszek_v2_append_jsonl_store('bridge_queue', $row)) {
@@ -855,6 +931,10 @@ function daszek_check_ingress_quality_snapshot_write(WP_REST_Request $request) {
 }
 
 function daszek_check_operational_feed_snapshot_write(WP_REST_Request $request) {
+    return daszek_check_ingress_quality_snapshot_write($request);
+}
+
+function daszek_check_system_health_snapshot_write(WP_REST_Request $request) {
     return daszek_check_ingress_quality_snapshot_write($request);
 }
 
@@ -1436,5 +1516,147 @@ function daszek_api_v3_operational_feed_snapshot_ingest(WP_REST_Request $request
         'ingested_at' => $ingested_at,
         'storage' => 'operational_feed_snapshots',
         'warnings' => $ingest_warnings,
+    ];
+}
+
+function daszek_v3_validate_system_health_snapshot_payload($payload) {
+    if (!is_array($payload)) {
+        return new WP_Error('invalid_payload', 'Payload musi byc obiektem JSON.', ['status' => 400]);
+    }
+
+    $schema_name = isset($payload['schema_name']) ? sanitize_text_field($payload['schema_name']) : '';
+    if ($schema_name !== 'daszek_system_health_snapshot') {
+        return new WP_Error('invalid_schema', 'Nieprawidlowe schema_name.', ['status' => 400]);
+    }
+
+    if (empty($payload['schema_version'])) {
+        return new WP_Error('invalid_schema', 'Brak schema_version.', ['status' => 400]);
+    }
+
+    $snapshot_id = isset($payload['snapshot_id']) ? sanitize_text_field($payload['snapshot_id']) : '';
+    if ($snapshot_id === '') {
+        return new WP_Error('invalid_payload', 'Brak snapshot_id.', ['status' => 400]);
+    }
+
+    if (empty($payload['read_only']) || $payload['read_only'] !== true) {
+        return new WP_Error('invalid_payload', 'read_only musi byc true.', ['status' => 400]);
+    }
+
+    if (!isset($payload['creates_cases']) || $payload['creates_cases'] !== false) {
+        return new WP_Error('invalid_payload', 'creates_cases musi byc false.', ['status' => 400]);
+    }
+
+    if (!isset($payload['executes_actions']) || $payload['executes_actions'] !== false) {
+        return new WP_Error('invalid_payload', 'executes_actions musi byc false.', ['status' => 400]);
+    }
+
+    if (!isset($payload['components']) || !is_array($payload['components'])) {
+        return new WP_Error('invalid_payload', 'Brak obiektu components.', ['status' => 400]);
+    }
+
+    $forbidden = daszek_v3_operational_feed_forbidden_keys_flat();
+    $nodes = 0;
+    $err = daszek_v3_walk_forbidden_keys($payload, $forbidden, '', 0, $nodes);
+    if (is_wp_error($err)) {
+        return $err;
+    }
+
+    return true;
+}
+
+function daszek_api_v3_system_health_snapshots_list(WP_REST_Request $request) {
+    if (!daszek_v3_bootstrap_storage()) {
+        return new WP_Error('storage_error', daszek_v3_storage_error_message(), ['status' => 500]);
+    }
+    $rows = daszek_v3_sorted_system_health_snapshots_desc();
+    $limit = intval($request->get_param('limit') ?: 50);
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    $limit = min($limit, 200);
+
+    $trimmed = [];
+    foreach (array_slice($rows, 0, $limit) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $trimmed[] = [
+            'snapshot_id' => isset($row['snapshot_id']) ? sanitize_text_field($row['snapshot_id']) : '',
+            'created_at' => isset($row['created_at']) ? sanitize_text_field($row['created_at']) : '',
+            'ingested_at' => isset($row['ingested_at']) ? sanitize_text_field($row['ingested_at']) : '',
+            'title' => isset($row['title']) ? sanitize_text_field($row['title']) : '',
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'generated_at' => daszek_v2_now_iso(),
+        'storage' => 'system_health_snapshots',
+        'items' => $trimmed,
+    ];
+}
+
+function daszek_api_v3_system_health_snapshot_latest(WP_REST_Request $request) {
+    if (!daszek_v3_bootstrap_storage()) {
+        return new WP_Error('storage_error', daszek_v3_storage_error_message(), ['status' => 500]);
+    }
+    $snap = daszek_v3_latest_system_health_snapshot();
+    if (!$snap) {
+        return [
+            'ok' => true,
+            'snapshot' => null,
+            'message' => 'Brak zapisanych snapshotów system_health.',
+        ];
+    }
+    return [
+        'ok' => true,
+        'snapshot' => $snap,
+    ];
+}
+
+function daszek_api_v3_system_health_snapshot_detail(WP_REST_Request $request) {
+    if (!daszek_v3_bootstrap_storage()) {
+        return new WP_Error('storage_error', daszek_v3_storage_error_message(), ['status' => 500]);
+    }
+    $snapshot_id = sanitize_text_field($request->get_param('id'));
+    $snap = daszek_v3_get_system_health_snapshot_by_id($snapshot_id);
+    if (!$snap) {
+        return new WP_Error('not_found', 'Snapshot system_health nie istnieje.', ['status' => 404]);
+    }
+    return [
+        'ok' => true,
+        'snapshot' => $snap,
+    ];
+}
+
+function daszek_api_v3_system_health_snapshot_ingest(WP_REST_Request $request) {
+    if (!daszek_v3_bootstrap_storage()) {
+        return new WP_Error('storage_error', daszek_v3_storage_error_message(), ['status' => 500]);
+    }
+
+    $payload = daszek_request_payload($request);
+    if (!is_array($payload)) {
+        return new WP_Error('invalid_payload', 'Payload musi byc obiektem JSON.', ['status' => 400]);
+    }
+
+    $validated = daszek_v3_validate_system_health_snapshot_payload($payload);
+    if (is_wp_error($validated)) {
+        return $validated;
+    }
+
+    $snapshot_id = isset($payload['snapshot_id']) ? sanitize_text_field($payload['snapshot_id']) : '';
+    $ingested_at = gmdate('c');
+    $payload['ingested_at'] = $ingested_at;
+
+    if (!daszek_v3_upsert_system_health_snapshot($payload)) {
+        return new WP_Error('storage_error', daszek_v3_storage_error_message(), ['status' => 500]);
+    }
+
+    return [
+        'ok' => true,
+        'snapshot_id' => $snapshot_id,
+        'ingested_at' => $ingested_at,
+        'storage' => 'system_health_snapshots',
+        'warnings' => [],
     ];
 }

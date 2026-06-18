@@ -18,6 +18,10 @@ function daszek_v3_operational_feed_snapshots_path() {
     return daszek_v3_data_dir() . 'operational_feed_snapshots.jsonl';
 }
 
+function daszek_v3_system_health_snapshots_path() {
+    return daszek_v3_data_dir() . 'system_health_snapshots.jsonl';
+}
+
 function daszek_v3_storage_error_message() {
     return 'Nie mozna zapisac danych Daszek v3 w wp-content/uploads/daszek/v3/. Sprawdz katalog i uprawnienia.';
 }
@@ -43,6 +47,13 @@ function daszek_v3_bootstrap_storage() {
     $feed_path = daszek_v3_operational_feed_snapshots_path();
     if (!file_exists($feed_path)) {
         if (file_put_contents($feed_path, '') === false) {
+            return false;
+        }
+    }
+
+    $health_path = daszek_v3_system_health_snapshots_path();
+    if (!file_exists($health_path)) {
+        if (file_put_contents($health_path, '') === false) {
             return false;
         }
     }
@@ -290,6 +301,123 @@ function daszek_v3_get_operational_feed_snapshot_by_id($snapshot_id) {
         return null;
     }
     foreach (daszek_v3_sorted_operational_feed_snapshots_desc() as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        if (isset($row['snapshot_id']) && sanitize_text_field($row['snapshot_id']) === $needle) {
+            return $row;
+        }
+    }
+    return null;
+}
+
+/* --- System health snapshots (Daszek V3 — W3 observability health strip) --- */
+
+function daszek_v3_load_system_health_snapshots() {
+    $path = daszek_v3_system_health_snapshots_path();
+    if (!file_exists($path)) {
+        return [];
+    }
+
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!is_array($lines)) {
+        return [];
+    }
+
+    $items = [];
+    foreach ($lines as $line) {
+        $decoded = json_decode($line, true);
+        if (is_array($decoded)) {
+            $items[] = $decoded;
+        }
+    }
+
+    return $items;
+}
+
+function daszek_v3_rewrite_system_health_snapshots($rows) {
+    $path = daszek_v3_system_health_snapshots_path();
+    $tmp_path = $path . '.tmp';
+    $fp = fopen($tmp_path, 'wb');
+    if (!$fp) {
+        return false;
+    }
+
+    flock($fp, LOCK_EX);
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $line = json_encode($row, JSON_UNESCAPED_UNICODE);
+        if ($line === false) {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            @unlink($tmp_path);
+            return false;
+        }
+        fwrite($fp, $line . "\n");
+    }
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    if (!rename($tmp_path, $path)) {
+        @unlink($tmp_path);
+        return false;
+    }
+
+    return true;
+}
+
+function daszek_v3_upsert_system_health_snapshot($snapshot) {
+    if (!is_array($snapshot)) {
+        return false;
+    }
+
+    $snapshot_id = isset($snapshot['snapshot_id']) ? sanitize_text_field($snapshot['snapshot_id']) : '';
+    if ($snapshot_id === '') {
+        return false;
+    }
+
+    $existing = daszek_v3_load_system_health_snapshots();
+    $filtered = [];
+    foreach ($existing as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $sid = isset($row['snapshot_id']) ? sanitize_text_field($row['snapshot_id']) : '';
+        if ($sid !== '' && $sid === $snapshot_id) {
+            continue;
+        }
+        $filtered[] = $row;
+    }
+
+    $filtered[] = $snapshot;
+
+    return daszek_v3_rewrite_system_health_snapshots($filtered);
+}
+
+function daszek_v3_sorted_system_health_snapshots_desc() {
+    $rows = daszek_v3_load_system_health_snapshots();
+    usort($rows, function ($left, $right) {
+        return strcmp(daszek_v3_snapshot_sort_key($right), daszek_v3_snapshot_sort_key($left));
+    });
+    return $rows;
+}
+
+function daszek_v3_latest_system_health_snapshot() {
+    $sorted = daszek_v3_sorted_system_health_snapshots_desc();
+    if (empty($sorted)) {
+        return null;
+    }
+    return $sorted[0];
+}
+
+function daszek_v3_get_system_health_snapshot_by_id($snapshot_id) {
+    $needle = sanitize_text_field($snapshot_id);
+    if ($needle === '') {
+        return null;
+    }
+    foreach (daszek_v3_sorted_system_health_snapshots_desc() as $row) {
         if (!is_array($row)) {
             continue;
         }

@@ -46,6 +46,7 @@ const state = {
         quality: { summary: {} },
         tasks: [],
         lastIngress: { ok: false, snapshot: null, message: '' },
+        systemOsEvents: { ok: false, items: [], loadError: null, loading: false },
         operationalFeed: { ok: false, snapshot: null, message: '', loadError: null },
         cohortList: { ok: false, items: [], loadError: null },
         caseArchive: { ok: false, items: [], ids: [], loadError: null },
@@ -317,7 +318,7 @@ function projectionSectionMissingPreview() {
 }
 
 const PRIMARY_VIEW_TABS = ['desk', 'cases', 'day', 'archive', 'tasks'];
-const MORE_VIEW_TABS = ['cockpit', 'quality', 'last_ingress', 'cohort_runs'];
+const MORE_VIEW_TABS = ['cockpit', 'quality', 'system', 'last_ingress', 'cohort_runs'];
 
 function isGatebTestArtifact(item) {
     if (!item || typeof item !== 'object') {
@@ -457,6 +458,179 @@ function renderOperatorHero(item, options = {}) {
         </div>`;
 }
 
+function formatRelativeDateTime(value) {
+    if (!value) {
+        return '';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+    const diffMs = Date.now() - date.getTime();
+    if (diffMs < 0) {
+        return formatDate(value);
+    }
+    const min = Math.round(diffMs / 60000);
+    if (min < 1) {
+        return 'przed chwilą';
+    }
+    if (min < 60) {
+        return `${min} min temu`;
+    }
+    const hrs = Math.round(min / 60);
+    if (hrs < 24) {
+        return `${hrs} godz. temu`;
+    }
+    const days = Math.round(hrs / 24);
+    if (days < 7) {
+        return days === 1 ? 'wczoraj' : `${days} dni temu`;
+    }
+    return formatDate(value);
+}
+
+function senderLineFor(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const name = firstNonEmpty(row.sender_name);
+    const email = firstNonEmpty(row.customer_email, row.sender_email);
+    if (name && email) {
+        return `${name} <${email}>`;
+    }
+    return name || email;
+}
+
+function messageWhenFor(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    return firstNonEmpty(row.received_at, row.latest_message_at, row.latest_signal_at, row.updated_at);
+}
+
+function attachmentList(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const list = Array.isArray(row.attachments) ? row.attachments : [];
+    return list.filter(a => a && typeof a === 'object' && String(a.file_name || '').trim());
+}
+
+function attachmentIcon(mime) {
+    const m = String(mime || '').toLowerCase();
+    if (m.includes('pdf')) {
+        return '📄';
+    }
+    if (m.includes('image')) {
+        return '🖼️';
+    }
+    if (m.includes('sheet') || m.includes('excel') || m.includes('csv')) {
+        return '📊';
+    }
+    if (m.includes('word') || m.includes('document')) {
+        return '📝';
+    }
+    return '📎';
+}
+
+function renderMailHeaderLine(item) {
+    const sender = senderLineFor(item);
+    const when = messageWhenFor(item);
+    const rel = formatRelativeDateTime(when);
+    const abs = when ? formatDate(when) : '';
+    const attachCount = attachmentList(item).length;
+    const parts = [];
+    if (sender) {
+        parts.push(`<span class="mailmeta-from" title="${escapeHtml(sender)}">✉ ${escapeHtml(limitText(sender, 46))}</span>`);
+    }
+    if (rel) {
+        parts.push(`<span class="mailmeta-when" title="${escapeHtml(abs)}">${escapeHtml(rel)}</span>`);
+    }
+    if (attachCount) {
+        parts.push(`<span class="mailmeta-attach" title="Załączniki: ${attachCount}">📎 ${attachCount}</span>`);
+    }
+    if (!parts.length) {
+        return '';
+    }
+    return `<div class="record-mailmeta">${parts.join('')}</div>`;
+}
+
+function attachmentKindLabel(att) {
+    const row = att && typeof att === 'object' ? att : {};
+    const kind = String(row.document_kind || '').trim();
+    const map = {
+        floor_plan: 'Rzut / projekt',
+        invoice: 'Faktura',
+        offer: 'Oferta',
+        energy_certificate: 'Świadectwo energetyczne',
+        photo: 'Zdjęcie',
+        generic: '',
+    };
+    if (map[kind]) {
+        return map[kind];
+    }
+    return humanizeCode(kind, '');
+}
+
+function renderAttachmentChips(item, { interactive = true } = {}) {
+    const list = attachmentList(item);
+    if (!list.length) {
+        return '';
+    }
+    const chips = list.map((att, idx) => {
+        const name = escapeHtml(limitText(att.file_name, 42));
+        const icon = attachmentIcon(att.mime_type);
+        const kind = attachmentKindLabel(att);
+        const title = escapeHtml(`${att.file_name}${kind ? ' — ' + kind : ''}`);
+        const hasText = att.has_text && String(att.summary_pl || '').trim();
+        if (interactive && hasText) {
+            return `<button type="button" class="attachment-chip attachment-chip--preview" data-attachment-preview="${escapeHtml(String(idx))}" title="${title}">${icon} ${name}</button>`;
+        }
+        return `<span class="attachment-chip" title="${title}">${icon} ${name}</span>`;
+    }).join('');
+    return `<div class="attachment-chips">${chips}</div>`;
+}
+
+function renderDetailMailHeader(item) {
+    const sender = senderLineFor(item);
+    const when = messageWhenFor(item);
+    const abs = when ? formatDate(when) : '';
+    const rel = when ? formatRelativeDateTime(when) : '';
+    const rows = [];
+    if (sender) {
+        rows.push(`<div class="detail-mail-row"><span class="detail-mail-key">Od</span><span class="detail-mail-val">${escapeHtml(sender)}</span></div>`);
+    }
+    if (abs) {
+        const whenText = rel && rel !== abs ? `${abs} (${rel})` : abs;
+        rows.push(`<div class="detail-mail-row"><span class="detail-mail-key">Data</span><span class="detail-mail-val">${escapeHtml(whenText)}</span></div>`);
+    }
+    if (!rows.length) {
+        return '';
+    }
+    return `<section class="detail-mail-header">${rows.join('')}</section>`;
+}
+
+function renderCaseAttachmentsSection(item) {
+    const list = attachmentList(item);
+    if (!list.length) {
+        return '';
+    }
+    const rows = list.map(att => {
+        const icon = attachmentIcon(att.mime_type);
+        const name = escapeHtml(att.file_name);
+        const kind = attachmentKindLabel(att);
+        const kindText = kind ? `<span class="attachment-kind">${escapeHtml(kind)}</span>` : '';
+        const summary = String(att.summary_pl || '').trim();
+        if (summary) {
+            return `
+                <details class="attachment-item">
+                    <summary>${icon} ${name} ${kindText}</summary>
+                    <p class="attachment-preview">${escapeHtml(summary)}</p>
+                </details>`;
+        }
+        return `<div class="attachment-item attachment-item--plain">${icon} ${name} ${kindText}</div>`;
+    }).join('');
+    return `
+        <section class="detail-section detail-section-intelligence">
+            <h3>Załączniki (${list.length})</h3>
+            <p class="detail-muted">Podgląd to tekst wyciągnięty przez AI. Pełny plik otwórz w Gmailu.</p>
+            ${rows}
+        </section>`;
+}
+
 function resolveFeedbackNoteId(note) {
     const row = note && typeof note === 'object' ? note : {};
     const candidates = [
@@ -498,21 +672,20 @@ function renderNoteFeedbackBlock(note) {
         return '<p class="detail-muted">Ocena sugestii wymaga powiązania kartki ze sprawą i sygnałem w magazynie.</p>';
     }
     return `
-        <section class="detail-section detail-section-actions">
-            <h3>Twoja ocena</h3>
+        <section class="detail-section detail-section-actions detail-section-quality">
+            <h3>Ocena jakości AI</h3>
+            <p class="detail-muted">Czy AI trafnie wyłowiło tę sprawę? Twoja ocena uczy model — nie wysyła nic do klienta.</p>
             <div class="feedback-grid feedback-grid--primary">
-                <button type="button" class="btn btn-ghost btn-small" data-note-action="trafne" data-note-id="${escapeHtml(noteId)}">Trafne</button>
-                <button type="button" class="btn btn-secondary btn-small" data-note-action="zla_sprawa" data-note-id="${escapeHtml(noteId)}">Zła sprawa</button>
-                <button type="button" class="btn btn-ghost btn-small" data-note-action="to_juz_nieaktualne" data-note-id="${escapeHtml(noteId)}">To już nieaktualne</button>
-                ${note.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-note-action="tylko_w_sprawie" data-note-id="${escapeHtml(noteId)}">Tylko w sprawie</button>` : ''}
+                <button type="button" class="btn btn-ghost btn-small" data-note-action="trafne" data-note-id="${escapeHtml(noteId)}" title="Słusznie trafiło na biurko">👍 Trafne</button>
+                <button type="button" class="btn btn-secondary btn-small" data-note-action="zla_sprawa" data-note-id="${escapeHtml(noteId)}" title="To nie powinno tu trafić / błędna klasyfikacja">👎 Nietrafione</button>
             </div>
             <details class="detail-tech detail-collapsible">
-                <summary>Więcej ocen</summary>
+                <summary>Dokładniejsza ocena</summary>
                 <div class="detail-tech-body feedback-grid">
-                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_mocne" data-note-id="${escapeHtml(noteId)}">Za mocne</button>
-                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_slabe" data-note-id="${escapeHtml(noteId)}">Za słabe</button>
-                    <button type="button" class="btn btn-ghost btn-small" data-note-action="nie_pokazuj_takich" data-note-id="${escapeHtml(noteId)}">Nie pokazuj mi takich</button>
-                    <button type="button" class="btn btn-ghost btn-small" data-note-merge="${escapeHtml(noteId)}">Połącz ze sprawą</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_mocne" data-note-id="${escapeHtml(noteId)}" title="Priorytet zawyżony">Za wysoki priorytet</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_slabe" data-note-id="${escapeHtml(noteId)}" title="Priorytet zaniżony">Za niski priorytet</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="nie_pokazuj_takich" data-note-id="${escapeHtml(noteId)}" title="Wycisz podobne w przyszłości">Nie pokazuj podobnych</button>
+                    ${note.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-note-merge="${escapeHtml(noteId)}" title="Scal z istniejącą sprawą">Połącz ze sprawą</button>` : ''}
                 </div>
             </details>
         </section>`;
@@ -650,6 +823,7 @@ function recordTypeLabel(item, fallback = 'Uwaga') {
         item.record_type_label,
         item.presence_label,
         item.family_label,
+        caseKindLabel(item.case_kind),
         caseFamilyLabel(item.family || item.case_family),
         fallback
     );
@@ -659,11 +833,23 @@ function recordStatusLabel(item) {
     return firstNonEmpty(
         item.status_label,
         item.current_state_label,
+        operationalStatusLabel(item.status || item.operational_status),
         item.lifecycle_label_pl,
         caseStateLabel(item.current_state),
         daszekLifecycle(item.lifecycle_state),
         'aktywny'
     );
+}
+
+function operationalStatusLabel(code) {
+    const raw = String(code || '').trim();
+    return {
+        pending_operator: 'Oczekuje operatora',
+        ready_for_quote: 'Gotowe do oferty',
+        enriching: 'Uzupełnianie danych',
+        raw_inquiry: 'Nowe zapytanie',
+        node_a_error: 'Błąd kalkulacji',
+    }[raw] || humanizeCode(raw, '');
 }
 
 function recordDueText(item) {
@@ -977,17 +1163,23 @@ function renderRecordBadges(item, { includeSource = true } = {}) {
 function renderOperationalNoteRecord(item, { showDone = true, compact = false } = {}) {
     const title = firstNonEmpty(item.title, 'Kartka operacyjna');
     const caseTitle = firstNonEmpty(item.case_title, item.case_id ? 'Powiązana sprawa' : 'Bez przypisanej sprawy');
-    const openNoteLabel = `Otwórz kartkę: ${limitText(title, 60)}`;
-    const openCaseLabel = `Otwórz sprawę: ${limitText(caseTitle, 60)}`;
+    // Single-stream: kafelek Biurka to projekcja sprawy — klik w całą kartę otwiera tę samą sprawę.
+    const opensCase = Boolean(item.case_id);
+    const openAttr = opensCase
+        ? `data-open-case="${escapeHtml(item.case_id)}"`
+        : `data-open-note="${escapeHtml(item.note_id)}"`;
+    const openLabel = opensCase ? `Otwórz sprawę: ${limitText(title, 60)}` : `Otwórz kartkę: ${limitText(title, 60)}`;
     const statusLabel = humanizeOperationalStatus(item.operational_status) || recordStatusLabel(item);
     const activity = recordActivityLabel(item);
+    const hasDraft = Boolean(String(item.draft_reply_pl || '').trim());
     return `
         <article class="operational-record">
-            <button type="button" class="record-main" data-open-note="${escapeHtml(item.note_id)}" aria-label="${escapeHtml(openNoteLabel)}" aria-controls="detail-panel">
+            <button type="button" class="record-main" ${openAttr} aria-label="${escapeHtml(openLabel)}" aria-controls="detail-panel">
                 <div class="record-top">
                     <span class="record-type">${escapeHtml(recordTypeLabel(item, 'Uwaga'))}</span>
                     <span class="record-status">${escapeHtml(statusLabel)}</span>
                 </div>
+                ${renderMailHeaderLine(item)}
                 ${renderOperatorHero(item, { essenceMax: compact ? 120 : 200 })}
                 ${renderRecordBadges(item)}
                 <div class="record-footer">
@@ -996,7 +1188,7 @@ function renderOperationalNoteRecord(item, { showDone = true, compact = false } 
                 </div>
             </button>
             <div class="record-actions">
-                ${item.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}">Otwórz sprawę</button>` : `<button type="button" class="btn btn-ghost btn-small" data-open-note="${escapeHtml(item.note_id)}" aria-label="${escapeHtml(openNoteLabel)}">Szczegóły</button>`}
+                ${hasDraft && opensCase ? `<button type="button" class="btn btn-primary btn-small" ${openAttr} aria-label="${escapeHtml(openLabel)}">Przejrzyj draft</button>` : ''}
                 ${showDone ? `<button type="button" class="btn btn-secondary btn-small" data-note-action="to_juz_nieaktualne" data-note-id="${escapeHtml(item.note_id)}">Zrobione</button>` : ''}
             </div>
         </article>
@@ -1019,14 +1211,9 @@ function operationalStatusPillClass(statusRaw) {
 
 function renderOperationalCaseRecord(item, options = {}) {
     const title = firstNonEmpty(item.title, item.case_key, 'Sprawa operacyjna');
-    const summary = limitText(firstNonEmpty(item.summary_short, item.summary, item.operator_brief_pl), 125);
-    const next = limitText(firstNonEmpty(item.primary_next_action_title_pl, item.next_step_hint_pl), 110);
     const area = firstNonEmpty(item.business_area_label, businessAreaLabel(item.business_area), item.family_label, caseFamilyLabel(item.family));
     const taskCount = Number(item.open_task_count || item.active_note_count || 0);
-    const openNoteId = firstNonEmpty(item.open_desk_note_id, item.note_id);
-    const signalMail = limitText(firstNonEmpty(item.latest_signal_summary_pl), 96);
     const openCaseLabel = `Otwórz sprawę: ${limitText(title, 60)}`;
-    const openNoteShort = openNoteId ? `Otwórz kartkę: ${limitText(openNoteId, 56)}` : '';
     const statusLabel = firstNonEmpty(item.status_label, caseStatusLabel(item.status));
     const opHuman = humanizeOperationalStatus(item.operational_status);
     const opPill = opHuman ? `<span class="status-pill ${operationalStatusPillClass(item.operational_status)}">${escapeHtml(opHuman)}</span>` : '';
@@ -1037,6 +1224,7 @@ function renderOperationalCaseRecord(item, options = {}) {
                     <span class="record-type">${escapeHtml(area || 'Sprawa')}</span>
                     <span class="record-status">${escapeHtml(statusLabel)}${opPill}</span>
                 </div>
+                ${renderMailHeaderLine(item)}
                 ${renderOperatorHero(item, { essenceMax: 200 })}
                 ${renderRecordBadges(item, { includeSource: false })}
                 <div class="record-footer">
@@ -1045,8 +1233,6 @@ function renderOperationalCaseRecord(item, options = {}) {
                 </div>
             </button>
             <div class="record-actions">
-                <button type="button" class="btn btn-ghost btn-small" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}">Otwórz</button>
-                ${openNoteId ? `<button type="button" class="btn btn-secondary btn-small" data-open-note="${escapeHtml(openNoteId)}" aria-label="${escapeHtml(openNoteShort)}">Otwórz kartkę</button>` : ''}
                 ${item.case_id && !options.archived ? `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(item.case_id)}">Archiwizuj</button>` : ''}
                 ${item.case_id && options.archived ? `<button type="button" class="btn btn-secondary btn-small" data-unarchive-case="${escapeHtml(item.case_id)}">Przywróć</button>` : ''}
             </div>
@@ -1379,6 +1565,22 @@ function businessAreaLabel(area) {
         internal_coordination: 'Koordynacja wewnętrzna',
         general_admin: 'Administracja',
     }[area] || humanizeCode(area, 'Operacje');
+}
+
+function caseKindLabel(kind) {
+    return {
+        wycena_oferta: 'Wycena / oferta',
+        zapytanie_klienta: 'Zapytanie klienta',
+        awaria_naprawa: 'Awaria / serwis',
+        przeglad_konserwacja: 'Przegląd / konserwacja',
+        faktura_sprzedaz: 'Faktura sprzedażowa',
+        faktura_zakup: 'Faktura zakupowa',
+        ksiegowosc: 'Księgowość',
+        zakupy_materialow: 'Zakupy materiałów',
+        szkolenie: 'Szkolenie / webinar',
+        inne: 'Sprawa wewnętrzna',
+        niezaklasyfikowane: 'Sprawa ogólna',
+    }[kind] || humanizeCode(kind, '');
 }
 
 function caseFamilyLabel(family) {
@@ -1800,7 +2002,7 @@ async function loadAllData() {
     }
 }
 
-const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'last_ingress', 'cohort_runs']);
+const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'system', 'last_ingress', 'cohort_runs']);
 
 function normalizeMainViewId(raw) {
     const id = String(raw || '').trim();
@@ -1830,7 +2032,7 @@ function viewConfig() {
     return {
         desk: {
             title: 'Biurko',
-            subtitle: 'Na czym skupić uwagę — operational feed z Node B (read-only).',
+            subtitle: 'Jedna lista: to, co wymaga Ciebie teraz. Pełny rejestr jest w zakładce Sprawy.',
         },
         cockpit: {
             title: 'Cockpit V3',
@@ -1842,7 +2044,7 @@ function viewConfig() {
         },
         cases: {
             title: 'Sprawy',
-            subtitle: 'Aktywne sprawy — sortowanie od najnowszej aktywności (data sygnału lub aktualizacji).',
+            subtitle: 'Pełny rejestr — przeszukaj wszystkie sprawy. Bieżącą pracę prowadź na Biurku.',
         },
         archive: {
             title: 'Archiwum',
@@ -1863,6 +2065,10 @@ function viewConfig() {
         cohort_runs: {
             title: 'Uruchomienia kohorty',
             subtitle: 'Lista bounded cohort z Node B (read-only) — szczegóły w panelu bocznym.',
+        },
+        system: {
+            title: 'System',
+            subtitle: 'Oś zdarzeń cross-repo (Node B) — projekcja read-only, nie magazyn prawdy.',
         },
     };
 }
@@ -2009,6 +2215,8 @@ function renderCurrentView() {
         renderQualityView();
     } else if (viewKey === 'last_ingress') {
         void startLastIngressViewLoad();
+    } else if (viewKey === 'system') {
+        void startSystemViewLoad();
     } else if (viewKey === 'cohort_runs') {
         renderCohortRunsView();
     } else {
@@ -2189,6 +2397,8 @@ function renderDeskView() {
         item.case_title,
         item.operator_brief_pl,
         item.operator_essence_pl,
+        item.sender_name,
+        item.customer_email,
     ]));
 
     if (!items.length) {
@@ -2539,6 +2749,8 @@ function renderCasesView() {
             item.family_label || item.family,
             item.current_state_label || item.current_state,
             item.case_id,
+            item.sender_name,
+            item.customer_email,
         ]);
     }));
 
@@ -2552,12 +2764,21 @@ function renderCasesView() {
         return;
     }
 
+    const searchActive = Boolean(String(state.search || '').trim());
     root.innerHTML = wrapOperationalViewShell('Sprawy', `
-        ${projectionBoundaryHtml()}
-        <p class="detail-muted cases-sort-hint">Sortowanie: od najnowszej aktywności.</p>
-        <section class="operational-list">
+        <section class="registry-header">
+            <div class="registry-header-row">
+                <h3>Rejestr spraw</h3>
+                <span class="registry-count">${escapeHtml(String(items.length))}</span>
+            </div>
+            <p class="detail-muted">${searchActive
+            ? 'Wyniki wyszukiwania w rejestrze spraw.'
+            : 'Wszystkie aktywne sprawy. Szukaj po nadawcy, temacie lub treści — bieżącą pracę prowadź na Biurku.'}</p>
+        </section>
+        <section class="operational-list operational-list--registry">
             ${items.map(item => renderOperationalCaseRecord(item)).join('')}
         </section>
+        ${projectionBoundaryHtml()}
     `);
 }
 
@@ -2719,6 +2940,143 @@ async function startLastIngressViewLoad() {
         return;
     }
     renderLastIngressView();
+}
+
+let systemViewRequestId = 0;
+
+async function startSystemViewLoad() {
+    const root = document.getElementById('view-root');
+    const requestId = ++systemViewRequestId;
+    state.data.systemOsEvents = { ok: false, items: [], loadError: null, loading: true };
+    state.data.systemHealth = { ok: false, snapshot: null, loadError: null, loading: true };
+    root.innerHTML = wrapDaszekViewShell(['System'], `
+        <section class="detail-section detail-section-os-events">
+            <h3>Oś systemu</h3>
+            <p class="detail-muted" role="status">Wczytywanie zdarzeń systemowych…</p>
+        </section>
+    `);
+    const [eventsResult, healthResult] = await Promise.allSettled([
+        apiFetch(V3_API_BASE, '/system/os-events/recent'),
+        apiFetch(V3_API_BASE, '/system-health-snapshots/latest'),
+    ]);
+    if (requestId !== systemViewRequestId || normalizeMainViewId(state.currentView) !== 'system') {
+        return;
+    }
+    if (eventsResult.status === 'fulfilled') {
+        const data = eventsResult.value;
+        const items = data && Array.isArray(data.items) ? data.items : [];
+        state.data.systemOsEvents = {
+            ok: !!(data && data.ok !== false),
+            items,
+            loadError: null,
+            loading: false,
+        };
+    } else {
+        const err = eventsResult.reason;
+        state.data.systemOsEvents = {
+            ok: false,
+            items: [],
+            loadError: String(err && err.message ? err.message : err),
+            loading: false,
+        };
+    }
+    if (healthResult.status === 'fulfilled') {
+        const data = healthResult.value;
+        state.data.systemHealth = {
+            ok: !!(data && data.ok !== false),
+            snapshot: data && data.snapshot ? data.snapshot : null,
+            loadError: null,
+            loading: false,
+        };
+    } else {
+        const err = healthResult.reason;
+        state.data.systemHealth = {
+            ok: false,
+            snapshot: null,
+            loadError: String(err && err.message ? err.message : err),
+            loading: false,
+        };
+    }
+    renderSystemView();
+}
+
+function renderSystemHealthStrip(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+        return `
+            <section class="system-health-strip system-health-strip-empty">
+                <p class="detail-muted">Brak snapshotu system_health. Uruchom <code>push_system_health_snapshot.py</code> z RAG.</p>
+            </section>
+        `;
+    }
+    const rag = snapshot.components && snapshot.components.rag ? snapshot.components.rag : {};
+    const status = String(rag.status || 'unknown').trim();
+    const statusClass = status === 'healthy' || status === 'ok' ? 'is-ok' : (status === 'degraded' ? 'is-warning' : 'is-muted');
+    const indexReady = rag.index_ready === true ? 'tak' : (rag.index_ready === false ? 'nie' : '—');
+    const docCount = rag.doc_count != null ? String(rag.doc_count) : '—';
+    const chunkCount = rag.chunk_count != null ? String(rag.chunk_count) : '—';
+    const ingestRunning = rag.ingest_running ? 'tak' : 'nie';
+    const when = formatDate(snapshot.ingested_at || snapshot.created_at || '');
+    return `
+        <section class="system-health-strip ${statusClass}">
+            <div class="system-health-head">
+                <h4>Stan KB RAG</h4>
+                <span class="record-badge">${escapeHtml(status)}</span>
+            </div>
+            <dl class="system-health-metrics">
+                <div><dt>Indeks gotowy</dt><dd>${escapeHtml(indexReady)}</dd></div>
+                <div><dt>Dokumenty</dt><dd>${escapeHtml(docCount)}</dd></div>
+                <div><dt>Chunki</dt><dd>${escapeHtml(chunkCount)}</dd></div>
+                <div><dt>Ingest w toku</dt><dd>${escapeHtml(ingestRunning)}</dd></div>
+            </dl>
+            <p class="detail-muted system-health-meta">Snapshot: ${escapeHtml(String(snapshot.snapshot_id || ''))} · ${escapeHtml(when)}</p>
+        </section>
+    `;
+}
+
+function renderSystemView() {
+    const root = document.getElementById('view-root');
+    const bundle = state.data.systemOsEvents || {};
+    const healthBundle = state.data.systemHealth || {};
+    if (bundle.loading || healthBundle.loading) {
+        return;
+    }
+    if (bundle.loadError) {
+        root.innerHTML = wrapDaszekViewShell(['System'], `
+            <section class="detail-section detail-section-os-events">
+                <h3>Oś systemu</h3>
+                <p class="error-inline" role="alert">${escapeHtml(bundle.loadError)}</p>
+                <p class="detail-muted">Read-only projekcja z Node B — nie magazyn prawdy.</p>
+            </section>
+        `);
+        return;
+    }
+    const items = Array.isArray(bundle.items) ? bundle.items : [];
+    const rows = items.map((ev) => {
+        const summary = String(ev.summary_pl || ev.event_type || 'Zdarzenie').trim();
+        const repo = String(ev.source_repo || '').trim();
+        const eid = String(ev.engagement_id || '').trim();
+        const when = formatDate(ev.occurred_at || '');
+        const status = String((ev.payload && ev.payload.status) || ev.status || 'ok').trim();
+        const statusClass = status === 'error' ? 'is-error' : (status === 'warning' ? 'is-warning' : 'is-ok');
+        const typeLabel = String(ev.event_type || '').trim();
+        return `<li class="os-event-row ${statusClass}">
+            <div class="os-event-head">
+                <time datetime="${escapeHtml(String(ev.occurred_at || ''))}">${escapeHtml(when)}</time>
+                ${repo ? `<span class="record-badge os-event-repo">${escapeHtml(repo)}</span>` : ''}
+                ${typeLabel ? `<span class="record-badge">${escapeHtml(typeLabel)}</span>` : ''}
+            </div>
+            <p class="os-event-summary">${escapeHtml(summary)}</p>
+            ${eid ? `<p class="detail-muted os-event-engagement">engagement: ${escapeHtml(eid)}</p>` : ''}
+        </li>`;
+    }).join('');
+    root.innerHTML = wrapDaszekViewShell(['System'], `
+        ${renderSystemHealthStrip(healthBundle.snapshot)}
+        <section class="detail-section detail-section-os-events">
+            <h3>Oś systemu</h3>
+            <p class="detail-muted">Read-only timeline zdarzeń cross-repo (Node B). Nie zastępuje dziennika sprawy ani workflow Cieplo w jego DB.</p>
+            ${items.length ? `<ul class="os-event-list">${rows}</ul>` : '<p class="detail-muted">Brak zdarzeń systemowych.</p>'}
+        </section>
+    `);
 }
 
 function renderLastIngressView() {
@@ -3112,6 +3470,7 @@ async function openCaseDetail(caseId) {
         state.detail = { type: 'case', payload: fromFeed, source: 'operational_feed' };
         setDetailPanelChromeOpen(true);
         renderDetailPanel();
+        void refreshCaseDetailOsEvents();
         return;
     }
     state.detail = { type: 'detail_loading', mode: 'case', id: cid };
@@ -3128,6 +3487,7 @@ async function openCaseDetail(caseId) {
         }
         state.detail = { type: 'case', payload: detail, engagement: engagementSummary, source: 'v2_live' };
         renderDetailPanel();
+        void refreshCaseDetailOsEvents();
     } catch (error) {
         const st = Number(error.status || 0);
         let msg = String(error.message || 'Błąd wczytania sprawy.');
@@ -3359,6 +3719,32 @@ function renderOperationalTimeline(items) {
     }).join('')}</ol>`;
 }
 
+function renderEngagementActionsPlaceholder(caseItem, payload) {
+    const row = caseItem || {};
+    const actions = Array.isArray(row.engagement_actions)
+        ? row.engagement_actions
+        : (Array.isArray(payload && payload.engagement_actions) ? payload.engagement_actions : []);
+    if (!actions.length) {
+        return '';
+    }
+    const cards = actions.map((a) => {
+        const item = a || {};
+        const enabled = item.enabled !== false;
+        const label = String(item.payload_pl || item.id || 'Akcja').trim();
+        const reason = String(item.disabled_reason_pl || '').trim();
+        return `<li class="engagement-action-card ${enabled ? '' : 'is-disabled'}">
+            <span class="engagement-action-label">${escapeHtml(label)}</span>
+            ${enabled ? '<span class="detail-muted">(placeholder — wykonanie policy-gated)</span>' : `<span class="detail-muted">${escapeHtml(reason || 'Niedostępne')}</span>`}
+        </li>`;
+    }).join('');
+    return `
+        <section class="detail-section detail-section-actions detail-section-engagement-actions">
+            <h3>Sugerowane akcje (agent)</h3>
+            <p class="detail-muted">Podgląd kontraktu actions[] — bez autonomicznego wykonania.</p>
+            <ul class="engagement-actions-list">${cards}</ul>
+        </section>`;
+}
+
 function renderHitlOperatorActions(caseItem, payload) {
     const row = caseItem || {};
     const hitlPending = Boolean(
@@ -3372,14 +3758,29 @@ function renderHitlOperatorActions(caseItem, payload) {
     }
     const engagementId = String(row.engagement_id || (payload && payload.engagement_id) || '').trim();
     const caseId = String(row.case_id || (payload && payload.case_id) || '').trim();
-    const actionId = 'draft_reply';
+    const actionId = String(row.hitl_action_id || (payload && payload.hitl_action_id) || 'draft_reply').trim();
+    const draft = String(row.draft_reply_pl || (payload && payload.draft_reply_pl) || '').trim();
+    const hasDraft = draft.length > 0;
+    const asks = Array.isArray(row.operator_questions_pl)
+        ? row.operator_questions_pl
+        : (Array.isArray(payload && payload.operator_questions_pl) ? payload.operator_questions_pl : []);
+    const draftBlock = hasDraft
+        ? `<label class="ds-draft-label" for="ds-hitl-draft">Treść odpowiedzi (możesz edytować przed wysłaniem)</label>
+           <textarea id="ds-hitl-draft" class="ds-draft" data-hitl-draft rows="8">${escapeHtml(draft)}</textarea>`
+        : `<p class="detail-muted">Brak gotowego draftu — decyzja należy do Ciebie. Asystent zebrał kontekst sprawy.</p>
+           ${asks.length ? `<ul class="ds-ask">${asks.map(q => `<li>${escapeHtml(String(q))}</li>`).join('')}</ul>` : ''}`;
+    // Oś: odpowiedź do klienta. "Wyślij" = realna odpowiedź (primary). "Zatwierdź bez wysyłki" = akceptacja planu agenta.
+    const primaryAction = hasDraft
+        ? `<button type="button" class="btn btn-primary" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" title="Wyślij tę odpowiedź do klienta">Wyślij odpowiedź</button>`
+        : `<button type="button" class="btn btn-primary" disabled title="Najpierw potrzebny jest draft odpowiedzi">Wyślij odpowiedź (brak draftu)</button>`;
     return `
-        <section class="detail-section detail-section-intelligence">
-            <h3>Decyzja operatora (HITL)</h3>
-            <p class="detail-muted">Draft jest gotowy technicznie — wysyłka wymaga zatwierdzenia.</p>
-            <div class="feedback-grid">
-                <button type="button" class="btn btn-primary btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}">ZATWIERDŹ</button>
-                <button type="button" class="btn btn-secondary btn-small" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}">WYŚLIJ</button>
+        <section class="detail-section detail-section-actions detail-section-reply">
+            <h3>Odpowiedź do klienta</h3>
+            <p class="detail-muted">Nic nie wychodzi bez Twojego kliknięcia. Przejrzyj, popraw i wyślij.</p>
+            ${draftBlock}
+            <div class="hitl-actions">
+                ${primaryAction}
+                <button type="button" class="btn btn-ghost btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" title="Zatwierdź plan agenta bez wysyłki maila">Zatwierdź bez wysyłki</button>
             </div>
         </section>`;
 }
@@ -3388,17 +3789,28 @@ function renderAgentTurnsSection(turns) {
     if (!Array.isArray(turns) || !turns.length) {
         return '';
     }
+    const operatorLines = turns
+        .map(t => String((t || {}).turn_summary_pl || '').trim())
+        .filter(Boolean);
+    const technical = turns.map(t => {
+        const row = t || {};
+        const tool = String(row.tool_name || 'narzędzie').trim();
+        const tokens = Number(row.tokens_used || 0);
+        const meta = tokens > 0 ? ` · ${tokens} tok` : '';
+        const status = String(row.tool_status || '').trim();
+        return `<li><div class="timeline-meta">${escapeHtml(tool)}${escapeHtml(meta)}</div><div>${escapeHtml(status)}</div></li>`;
+    }).join('');
+    const summaryBlock = operatorLines.length
+        ? `<ul class="ds-agent-summary">${operatorLines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+        : '<p class="detail-muted">Asystent nie dodał notatek operatorskich.</p>';
     return `
         <section class="detail-section detail-section-intelligence">
-            <h3>Agent HVAC (ostatnie kroki)</h3>
-            <ol class="detail-timeline">${turns.map(t => {
-        const row = t || {};
-        const tool = String(row.tool_name || '').trim();
-        const summary = String(row.turn_summary_pl || row.tool_status || '').trim();
-        const tokens = Number(row.tokens_used || 0);
-        const meta = tokens > 0 ? ` · ${tokens} tokenów` : '';
-        return `<li><div class="timeline-meta">${escapeHtml(tool || 'narzędzie')}${escapeHtml(meta)}</div><div>${escapeHtml(summary)}</div></li>`;
-    }).join('')}</ol>
+            <h3>Co ustalił asystent</h3>
+            ${summaryBlock}
+            <details class="ds-tech">
+                <summary>Szczegóły techniczne (kroki agenta)</summary>
+                <ol class="detail-timeline">${technical}</ol>
+            </details>
         </section>`;
 }
 
@@ -3526,7 +3938,7 @@ function gapSummaryText(raw) {
         return raw.trim();
     }
     if (raw && typeof raw === 'object') {
-        return String(raw.summary || raw.summary_pl || raw.text || '').trim();
+        return String(raw.ask_pl || raw.summary || raw.summary_pl || raw.text || '').trim();
     }
     return '';
 }
@@ -3756,6 +4168,138 @@ function renderCieploEngagementBlock(engagementBundle) {
         return '<div class="vnext-context-micro"><p class="detail-muted">Ten sam klient może mieć zlecenie Cieplo — jeszcze nie powiązane automatycznie.</p></div>';
     }
     return `<div class="vnext-context-micro"><p><strong>Zlecenie Cieplo</strong> <span class="record-badge">${escapeHtml(workflowId)}</span></p><p class="detail-muted">Zaangażowanie: ${escapeHtml(String(bundle.engagement_id || ''))}</p></div>`;
+}
+
+function resolveEngagementIdFromCaseDetail(detail) {
+    if (!detail || detail.type !== 'case') {
+        return '';
+    }
+    const engRoot = detail.engagement;
+    if (engRoot && typeof engRoot === 'object') {
+        const fromRoot = String(engRoot.engagement_id || '').trim();
+        if (fromRoot) {
+            return fromRoot;
+        }
+        const nested = engRoot.engagement;
+        if (nested && typeof nested === 'object') {
+            const fromNested = String(nested.engagement_id || '').trim();
+            if (fromNested) {
+                return fromNested;
+            }
+        }
+    }
+    const payload = detail.payload && typeof detail.payload === 'object' ? detail.payload : {};
+    const caseItem = payload.case && typeof payload.case === 'object' ? payload.case : {};
+    return String(caseItem.engagement_id || payload.engagement_id || '').trim();
+}
+
+async function loadOsEventsForEngagement(engagementId) {
+    const eid = String(engagementId || '').trim();
+    if (!eid) {
+        return { ok: false, items: [], loadError: null, engagement_id: '' };
+    }
+    try {
+        const data = await apiFetch(V3_API_BASE, `/engagements/${encodeURIComponent(eid)}/os-events`);
+        const items = data && Array.isArray(data.items) ? data.items : [];
+        return {
+            ok: !!(data && data.ok !== false),
+            items,
+            loadError: null,
+            engagement_id: eid,
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            items: [],
+            loadError: String(err.message || err),
+            engagement_id: eid,
+        };
+    }
+}
+
+async function refreshCaseDetailOsEvents() {
+    if (!state.detail || state.detail.type !== 'case') {
+        return;
+    }
+    let eid = resolveEngagementIdFromCaseDetail(state.detail);
+    const payload = state.detail.payload && typeof state.detail.payload === 'object' ? state.detail.payload : {};
+    const caseItem = payload.case && typeof payload.case === 'object' ? payload.case : {};
+    const caseId = String(caseItem.case_id || '').trim();
+    if (!eid && caseId) {
+        try {
+            const eng = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(caseId)}/engagement`);
+            if (eng && typeof eng.engagement === 'object') {
+                state.detail.engagement = eng.engagement;
+                eid = resolveEngagementIdFromCaseDetail(state.detail);
+            }
+        } catch (_engErr) {
+            // engagement lookup optional
+        }
+    }
+    if (!eid) {
+        state.detail.osEvents = { ok: false, items: [], loadError: null, engagement_id: '', loading: false };
+        renderDetailPanel();
+        return;
+    }
+    state.detail.osEvents = { ok: false, items: [], loadError: null, engagement_id: eid, loading: true };
+    renderDetailPanel();
+    const loaded = await loadOsEventsForEngagement(eid);
+    if (!state.detail || state.detail.type !== 'case') {
+        return;
+    }
+    state.detail.osEvents = { ...loaded, loading: false };
+    renderDetailPanel();
+}
+
+function renderOsEventsSection(osEventsBundle) {
+    const bundle = osEventsBundle && typeof osEventsBundle === 'object' ? osEventsBundle : null;
+    if (!bundle) {
+        return '';
+    }
+    if (bundle.loading) {
+        return `
+            <section class="detail-section detail-section-os-events">
+                <h3>Oś systemu</h3>
+                <p class="detail-muted" role="status">Wczytywanie zdarzeń systemowych…</p>
+            </section>`;
+    }
+    if (bundle.loadError) {
+        return `
+            <section class="detail-section detail-section-os-events">
+                <h3>Oś systemu</h3>
+                <p class="error-inline" role="alert">${escapeHtml(bundle.loadError)}</p>
+                <p class="detail-muted">Read-only projekcja z Node B — nie magazyn prawdy.</p>
+            </section>`;
+    }
+    const items = Array.isArray(bundle.items) ? bundle.items : [];
+    if (!items.length) {
+        return `
+            <section class="detail-section detail-section-os-events">
+                <h3>Oś systemu</h3>
+                <p class="detail-muted">Brak zdarzeń systemowych dla tego zaangażowania.</p>
+                <p class="detail-muted">Read-only projekcja z Node B — nie magazyn prawdy.</p>
+            </section>`;
+    }
+    const rows = items.map((ev) => {
+        const summary = String(ev.summary_pl || ev.event_type || 'Zdarzenie').trim();
+        const repo = String(ev.source_repo || '').trim();
+        const when = formatDate(ev.occurred_at || '');
+        const status = String((ev.payload && ev.payload.status) || ev.status || 'ok').trim();
+        const statusClass = status === 'error' ? 'is-error' : (status === 'warning' ? 'is-warning' : 'is-ok');
+        return `<li class="os-event-row ${statusClass}">
+            <div class="os-event-head">
+                <time datetime="${escapeHtml(String(ev.occurred_at || ''))}">${escapeHtml(when)}</time>
+                ${repo ? `<span class="record-badge os-event-repo">${escapeHtml(repo)}</span>` : ''}
+            </div>
+            <p class="os-event-summary">${escapeHtml(summary)}</p>
+        </li>`;
+    }).join('');
+    return `
+        <section class="detail-section detail-section-os-events">
+            <h3>Oś systemu</h3>
+            <p class="detail-muted">Read-only timeline zdarzeń cross-repo (Node B). Nie zastępuje dziennika sprawy.</p>
+            <ul class="os-event-list">${rows}</ul>
+        </section>`;
 }
 
 function renderCaseProjectionExtras(caseItem, payload) {
@@ -4246,7 +4790,11 @@ function renderDetailPanel() {
                     <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
                 </div>
 
+                ${renderDetailMailHeader(note)}
+
                 ${renderOperatorHero(note)}
+
+                ${renderCaseAttachmentsSection(note)}
 
                 ${renderNoteFeedbackBlock(note)}
 
@@ -4286,7 +4834,7 @@ function renderDetailPanel() {
 
     const payload = state.detail.payload;
     const caseItem = payload.case || {};
-    const openNoteId = firstNonEmpty(caseItem.open_desk_note_id, payload.open_desk_note_id);
+    const feedbackNote = (Array.isArray(payload.desk_notes) ? payload.desk_notes : []).find(n => canSendFeedback(n)) || null;
     const stateLabel = caseItem.current_state_label || caseStateLabel(caseItem.current_state);
     const showState = stateLabel && !/^bez stanu$/i.test(String(stateLabel).trim());
     const caseTech = buildDetailTechBundle({
@@ -4311,7 +4859,6 @@ function renderDetailPanel() {
                     <h2 tabindex="-1" data-detail-focus-root>${escapeHtml(caseItem.title || 'Sprawa operacyjna')}</h2>
                 </div>
                 <div class="detail-header-actions">
-                    ${openNoteId ? `<button type="button" class="btn btn-secondary btn-small" data-open-note="${escapeHtml(openNoteId)}" aria-label="Otwórz kartkę ${escapeHtml(limitText(openNoteId, 56))}">Otwórz kartkę</button>` : ''}
                     ${caseItem.case_id ? (isCaseArchived(caseItem.case_id)
             ? `<button type="button" class="btn btn-secondary btn-small" data-unarchive-case="${escapeHtml(caseItem.case_id)}">Przywróć z archiwum</button>`
             : `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(caseItem.case_id)}" title="Ukryj sprawę z aktywnej listy">Archiwizuj</button>`) : '<span class="detail-muted" title="Brak powiązanej sprawy w magazynie">Archiwizacja niedostępna</span>'}
@@ -4319,9 +4866,21 @@ function renderDetailPanel() {
                 </div>
             </div>
 
+            ${renderDetailMailHeader(caseItem)}
+
             ${renderOperatorHero(caseItem)}
 
+            ${renderHitlOperatorActions(caseItem, payload)}
+
+            ${renderEngagementActionsPlaceholder(caseItem, payload)}
+
+            ${renderOsEventsSection(state.detail.osEvents)}
+
+            ${renderCaseAttachmentsSection(caseItem)}
+
             ${renderAboutCaseSection(caseItem)}
+
+            ${feedbackNote ? renderNoteFeedbackBlock(feedbackNote) : ''}
 
             ${renderGuidanceSection(caseItem)}
 
@@ -4354,7 +4913,6 @@ function renderDetailPanel() {
                 ${docHtml}
             </section>`}
 
-            ${renderHitlOperatorActions(caseItem, payload)}
             ${renderAgentTurnsSection(payload.agent_turns)}
 
             ${timeline.length ? `
@@ -4440,6 +4998,12 @@ async function submitHitlAgentAction(trigger, kind) {
         showError('Brak engagement_id — odśwież szczegóły sprawy.');
         return;
     }
+    const draftEl = document.querySelector('[data-hitl-draft]');
+    const draftText = draftEl ? String(draftEl.value || '').trim() : '';
+    if (kind === 'send' && !draftText) {
+        showError('Brak treści draftu do wysłania — najpierw wygeneruj lub uzupełnij draft.');
+        return;
+    }
     const endpoint = kind === 'send' ? '/agent-hitl/send' : '/agent-hitl/approve';
     try {
         await apiFetch(V2_API_BASE, endpoint, {
@@ -4449,6 +5013,7 @@ async function submitHitlAgentAction(trigger, kind) {
                 case_id: caseId,
                 action_id: actionId,
                 operator_id: state.currentUser || 'operator',
+                draft_pl: draftText,
             }),
         });
         showToast(kind === 'send' ? 'Wysyłka zapisana w kolejce bridge.' : 'HITL zatwierdzone — odświeżam widok.');

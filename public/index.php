@@ -81,6 +81,7 @@ $csrf = daszek_generate_csrf_token();
                     <div id="view-tabs-more-menu" class="view-tabs-more-menu" hidden>
                         <button type="button" class="view-tab-more-item nav-link" data-view="cockpit">Cockpit</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="quality">Jakość AI</button>
+                        <button type="button" class="view-tab-more-item nav-link" data-view="system">System</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="last_ingress">Ostatni ingress</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="cohort_runs">Kohorty</button>
                     </div>
