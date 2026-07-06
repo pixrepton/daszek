@@ -53,7 +53,7 @@ Powiązane normy: [`gmail-agent/docs/core/CONTEXT_PROJECTION_KNOWLEDGE_GRAPH.md`
 
 ## 2. Jedność PRO — jeden panel operatorski
 
-Operator widzi **jeden produkt**: panel Daszek PRO (plugin **1.3.1**), nie „V3 obok V2”.
+Operator widzi **jeden produkt**: panel Daszek PRO (plugin **1.3.3**), nie „V3 obok V2”.
 
 | Warstwa widoczna                   | Źródło danych                                                                        |
 | ---------------------------------- | ------------------------------------------------------------------------------------ |
@@ -89,9 +89,9 @@ flowchart TB
 
 ### Lokalny dev (kanoniczny — Docker)
 
-| Węzeł      | Compose                                                                                | URL z hosta             | Rola                             |
-| ---------- | -------------------------------------------------------------------------------------- | ----------------------- | -------------------------------- |
-| **Node A** | [`docker-compose.daszek-local.yml`](docker-compose.daszek-local.yml)                   | `http://127.0.0.1:8090` | WP + plugin [`daszek/`](daszek/) |
+| Węzeł      | Compose                                                                                | URL z hosta             | Rola                                                      |
+| ---------- | -------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
+| **Node A** | [`docker-compose.daszek-local.yml`](docker-compose.daszek-local.yml)                   | `http://127.0.0.1:8090` | WP + plugin [`daszek/`](daszek/)                          |
 | **Node B** | [`gmail-agent/docker-compose.local-vps.yml`](gmail-agent/docker-compose.local-vps.yml) | `http://127.0.0.1:8766` | API, worker, Postgres `:54329` (`GMAIL_AGENT_NODEB_PORT`) |
 
 **Start (skrót):**
@@ -139,7 +139,7 @@ Po wgraniu pluginu: **flush permalinków** (WP → Ustawienia → Bezpośrednie 
 
 ## 4. gmail-agent (Node B) — rola i przepływ
 
-**Samodzielnie** gmail-agent to runtime intelligence i backoffice (CLI, API `:8765` / `:8443`, worker, doctor). Operator **może** pracować bez Daszka, ale **docelowy UX** to panel WP.
+**Samodzielnie** gmail-agent to runtime intelligence i backoffice (CLI, API host `:8766` lokalnie / `:8443` prod, worker, doctor). Operator **może** pracować bez Daszka, ale **docelowy UX** to panel WP.
 
 ### Oś techniczna (skrót)
 
@@ -175,7 +175,17 @@ Po wgraniu pluginu: **flush permalinków** (WP → Ustawienia → Bezpośrednie 
 - Walidacja POST migawki (`includes/api-v2.php`)
 - Magazyn migawek V3 (`includes/store-v3.php`)
 - Magazyn v2: desk, cases, bridge (`includes/store-v2*.php`)
-- Proxy Skrzat / engagement do Node B
+- Proxy Skrzat / engagement / **merged timeline** / **learning candidates** do Node B
+
+### Szczegół sprawy — sekcje Case OS (2026-06-19+)
+
+| Sekcja UI                 | Proxy Node B                                           | Opis                                                                                            |
+| ------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **Oś czasu sprawy**       | `GET /wp-json/daszek/v3/engagements/{id}/timeline`     | 3 źródła: sprawa (`case_event`), oś systemu (`os_event`), agent (`agent_turn`); filtry checkbox |
+| **Sugestie z obserwacji** | `GET/POST /wp-json/daszek/v3/learning/rule-candidates` | Kandydaci zasad z Mechanizmu A; operator **zatwierdza** lub odrzuca — bez auto-zapisu do SoT    |
+| **Skrzat**                | `POST /wp-json/daszek/v3/cases/{id}/skrzat/ask`        | Doradztwo D1; przy scope sprawy RAG idzie ContextHub (Node B proxy)                             |
+
+Daszek **nie** zapisuje learning rules ani timeline jako prawdy — tylko proxy read/write przez API Node B.
 
 ### Weryfikacja lokalna (bez prod)
 
@@ -183,6 +193,9 @@ Po wgraniu pluginu: **flush permalinków** (WP → Ustawienia → Bezpośrednie 
 # z daszek/
 node --check public/app.js
 php -l includes/api-v2.php
+
+# po zmianie diagramów zakładki System (źródło: knowledge/docs/daszek-system-diagrams.md):
+python scripts/sync_system_diagrams_manifest.py
 
 # z gmail-agent/
 python -m pytest tools/gmail_audit/tests/test_daszek_v3_surface_static.py tools/gmail_audit/tests/test_daszek_v3_fixtures.py tools/gmail_audit/tests/test_agent_hitl_bridge.py -q
@@ -242,15 +255,16 @@ Rzadkie widoki: **Więcej ▾** (Cockpit, Jakość AI, kohorty, …).
 
 ### Widoki i intencje
 
-| Widok           | Intencja                          | Dane                              |
-| --------------- | --------------------------------- | --------------------------------- |
-| Biurko          | Co dziś wymaga uwagi              | `feed.desk`                       |
-| Dzień           | Plan dnia / fallback              | `feed.day`                        |
-| Sprawy          | Przegląd + szczegół               | `feed.cases`, `feed.case_details` |
-| Zadania         | Next actions                      | `feed.tasks`                      |
-| Archiwum        | Sprawy ukryte (overlay A)         | REST v2 case-archive              |
-| Ostatni ingress | Bounded ingress (osobny kontekst) | `ingress-quality-snapshots`       |
-| Kohorty         | Uruchomienia testów               | `/daszek/v3/cohort-runs`          |
+| Widok           | Intencja                                             | Dane                                             |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------ |
+| Biurko          | Co dziś wymaga uwagi                                 | `feed.desk`                                      |
+| Dzień           | Plan dnia / fallback                                 | `feed.day`                                       |
+| Sprawy          | Przegląd + szczegół                                  | `feed.cases`, `feed.case_details`                |
+| Zadania         | Next actions                                         | `feed.tasks`                                     |
+| Archiwum        | Sprawy ukryte (overlay A)                            | REST v2 case-archive                             |
+| Ostatni ingress | Bounded ingress (osobny kontekst)                    | `ingress-quality-snapshots`                      |
+| **System**      | Podgląd OS: komponenty, alerty, oś zdarzeń, diagramy | `GET /system/os-events/recent`, health snapshots |
+| Kohorty         | Uruchomienia testów                                  | `/daszek/v3/cohort-runs`                         |
 
 **Nie mieszać** na jednym ekranie listowym: operational feed vs ingress quality.
 
@@ -326,6 +340,42 @@ Wymagane env na WP: `DASZEK_NODE_B_API_BASE`, `DASZEK_NODE_B_API_TOKEN` (Bearer 
 Fixture smoke: `operational_feed_agent_runtime.json` — sprawa z `hitl_required: true` i sekcją `agent_turns`.
 
 **Proof lokalny (Docker):** `python tools/gmail_audit/scripts/daszek_local_133_proof.py` → `DASZEK_LOCAL_133_PROOF_OK` (patrz §13).
+
+### Zakładka System — observability + diagramy (od 2026-06-17/18, Case OS 2026-06-18)
+
+Read-only podgląd całego TOP-INSTAL AI-OS: **Stan komponentów**, **Alerty**, **Oś czasu** (30 zdarzeń, rozwijanie `engagement_id`), a pod spodem diagramy Mermaid z opisami UX.
+
+**Model na diagramach:** centrum to **Case OS** (gmail-agent) — signal spine, MailboxMemory, Case Intelligence, projekcja feed V3. Oferta HVAC (kalk-top, Cieplo, fast-kalk) i RAG (Skrzat, widget) to **równoległe ścieżki**, nie „serce” całego systemu. Mapa do przeprojektowania: [`knowledge/docs/case-os-target-architecture-proposal.md`](../knowledge/docs/case-os-target-architecture-proposal.md).
+
+| Warstwa UI | Zawartość                                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Góra       | Alerty (warunkowo), tabela 7 komponentów, oś czasu z filtrami                                                                      |
+| Dół        | **4 diagramy globalne** + **19 modułowych** (kalk-top×2, daszek×3, rag-chat×4, rag-widget×1, gmail-agent×6, fast-kalk×1, cieplo×2) |
+
+**Diagramy globalne:** (1) architektura całości — dynamiczna, statusy komponentów; (2) cztery drogi do oferty i obsługi mailowej; (3) etapy Cieplo — dynamiczny, liczniki stanów; (4) **kręgosłup Case OS** (signal spine → reconcile → CaseContextPack → projekcja).
+
+**Nowe modułowe (gmail-agent / RAG / daszek):** signal spine, Case Intelligence, pipeline decyzyjny, pętla bridge; ekosystem RAG + granica D1/D2; feed V3 i most operatora.
+
+**Jeden plik źródłowy** (dokument + UI muszą być zsynchronizowane):
+
+| Plik                                                                                      | Rola                                                                 |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [`knowledge/docs/daszek-system-diagrams.md`](../knowledge/docs/daszek-system-diagrams.md) | **Edytuj tylko ten plik** — tytuły, opisy, bloki ` ```mermaid `      |
+| `daszek/scripts/sync_system_diagrams_manifest.py`                                         | Parser MD → `public/system-diagrams-manifest.js`                     |
+| `daszek/public/system-diagrams-manifest.js`                                               | Generowany; ładowany przed `app.js`                                  |
+| `daszek/public/app.js`                                                                    | Render UI + logika dynamiczna (statusy komponentów, liczniki Cieplo) |
+
+Workflow po zmianie diagramu lub opisu:
+
+```bash
+python daszek/scripts/sync_system_diagrams_manifest.py
+python daszek/scripts/sync_system_diagrams_manifest.py --check   # przed commitem
+docker compose -f docker-compose.daszek-local.yml up -d --force-recreate wordpress   # lokalnie
+```
+
+Proof Gate B: `daszek_system_observability_proof.py`, `daszek_system_diagrams_proof.py` (drugi weryfikuje sync manifestu + hostId `system-mermaid-case-os`, diagramy gmail-agent spine/intel/bridge, rag-chat ecosystem). Proof pack: [`knowledge/artifacts/proof-packs/daszek-system-ui-diagrams-2026-06-18.md`](../knowledge/artifacts/proof-packs/daszek-system-ui-diagrams-2026-06-18.md).
+
+Szczegóły: [`LAST_PROVEN_STATE.md`](../gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md) sekcje observability UI + diagrams.
 
 ---
 
@@ -568,7 +618,7 @@ Context Projection (trays, envelope) — centrum produktu na B; bounded proof: [
 daszek.php, uninstall.php
 includes/api.php, api-v2.php, auth.php, config.php, cron.php, cycles.php
 includes/store.php, store-v2.php, store-v2-domain.php, store-v2-read.php
-includes/store-v2-compat.php, store-v2-operator.php, store-v3.php
+includes/store-v2-operator.php, store-v3.php
 public/app.js, index.php, style.css, favicon.svg
 ```
 
@@ -737,12 +787,16 @@ Stdout: `desk_note_preflight`; payload może mieć `warnings`. Prefiks `desk-` (
 
 ### Browser proof harness
 
-| Narzędzie                                             | Cel                                             | Oczekiwany stdout                        |
-| ----------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
-| `tools/scripts/daszek_prod_nav_smoke.ps1`             | HTML/JS wersja bez logowania                    | `DASZEK_PROD_NAV_SMOKE_OK version=1.3.0` |
-| `tools/gmail_audit/playwright_daszek_pro_proof.py`    | PRO L0–L2, brak gateb/BADBAD na biurku          | `DASZEK_PRO_BROWSER_PROOF_OK`            |
-| `tools/gmail_audit/scripts/daszek_local_133_proof.py` | Feed + HITL approve/send + drain (local Docker) | `DASZEK_LOCAL_133_PROOF_OK`              |
-| `tools/gmail_audit/playwright_daszek_ui_smoke.py`     | Zrzuty wszystkich widoków                       | artefakty w `runs/daszek-*`              |
+| Narzędzie                                                        | Cel                                                             | Oczekiwany stdout                        |
+| ---------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------- |
+| `tools/scripts/daszek_prod_nav_smoke.ps1`                        | HTML/JS wersja bez logowania                                    | `DASZEK_PROD_NAV_SMOKE_OK version=1.3.0` |
+| `tools/gmail_audit/playwright_daszek_pro_proof.py`               | PRO L0–L2, brak gateb/BADBAD na biurku                          | `DASZEK_PRO_BROWSER_PROOF_OK`            |
+| `tools/gmail_audit/scripts/daszek_system_observability_proof.py` | Zakładka System: komponenty, alerty, oś czasu                   | `DASZEK_SYSTEM_OBSERVABILITY_PROOF_OK`   |
+| `tools/gmail_audit/scripts/daszek_system_diagrams_proof.py`      | Diagramy Mermaid + sync manifestu z `daszek-system-diagrams.md` | `DASZEK_SYSTEM_DIAGRAMS_PROOF_OK`        |
+| `tools/gmail_audit/scripts/case_os_architecture_proof.py`        | Case OS P0–P6 pełny produkt (Gate A+B)                          | `CASE_OS_PRODUCT_PROOF_OK`               |
+| `tools/gmail_audit/scripts/case_os_live_docker_proof.py`         | Case OS live: Skrzat + rag_advisory + nav HTML                  | `CASE_OS_LIVE_DOCKER_PROOF_OK`           |
+| `tools/gmail_audit/scripts/daszek_local_133_proof.py`            | Feed + HITL approve/send + drain (local Docker)                 | `DASZEK_LOCAL_133_PROOF_OK`              |
+| `tools/gmail_audit/playwright_daszek_ui_smoke.py`                | Zrzuty wszystkich widoków                                       | artefakty w `runs/daszek-*`              |
 
 Zasady harness: jawne środowisko (prod/local/fixture); zrzuty + URL/czas; **rozdziel** „widać w UI” od „zapisano w DB”; bez nieuzgodnionych kliknięć produkcyjnych.
 
@@ -777,6 +831,8 @@ bash /opt/gmail-agent/current/deploy/p2-nodeb-proof-bundle.sh
 
 ### Proof packs (archiwum)
 
+- [`knowledge/artifacts/proof-packs/case-os-architecture-p0-p6-product-2026-06-18.md`](knowledge/artifacts/proof-packs/case-os-architecture-p0-p6-product-2026-06-18.md) — Case OS P0–P6 pełny produkt
+- [`knowledge/artifacts/proof-packs/daszek-system-ui-diagrams-2026-06-18.md`](knowledge/artifacts/proof-packs/daszek-system-ui-diagrams-2026-06-18.md) — System tab: observability + 23 diagramy Case OS
 - [`knowledge/artifacts/proof-packs/daszek-1.2.2-prod-feed-2026-05-23.md`](knowledge/artifacts/proof-packs/daszek-1.2.2-prod-feed-2026-05-23.md)
 - Gate B / PRO closeout w timeline `knowledge/timeline/2026-05.md`
 
@@ -786,15 +842,17 @@ bash /opt/gmail-agent/current/deploy/p2-nodeb-proof-bundle.sh
 
 ### Node A — [`daszek/`](daszek/)
 
-| Plik                     | Rola                              |
-| ------------------------ | --------------------------------- |
-| `daszek.php`             | Bootstrap, `DASZEK_VERSION`       |
-| `public/app.js`          | UI PRO                            |
-| `includes/api-v2.php`    | REST v2/v3, walidacja feed, proxy |
-| `includes/store-v3.php`  | Migawki operational feed          |
-| `includes/store-v2*.php` | Desk, cases, bridge, archiwum     |
-| `fixtures/v3/*.json`     | Testy / podgląd UI                |
-| `deploy.sh`              | Wdrożenie SSH production/staging  |
+| Plik                                       | Rola                                                    |
+| ------------------------------------------ | ------------------------------------------------------- |
+| `daszek.php`                               | Bootstrap, `DASZEK_VERSION`                             |
+| `public/app.js`                            | UI PRO                                                  |
+| `public/system-diagrams-manifest.js`       | Generowany z `knowledge/docs/daszek-system-diagrams.md` |
+| `scripts/sync_system_diagrams_manifest.py` | Sync diagramów MD → manifest.js                         |
+| `includes/api-v2.php`                      | REST v2/v3, walidacja feed, proxy                       |
+| `includes/store-v3.php`                    | Migawki operational feed                                |
+| `includes/store-v2*.php`                   | Desk, cases, bridge, archiwum                           |
+| `fixtures/v3/*.json`                       | Testy / podgląd UI                                      |
+| `deploy.sh`                                | Wdrożenie SSH production/staging                        |
 
 ### Node B — [`gmail-agent/`](gmail-agent/)
 
@@ -808,6 +866,8 @@ bash /opt/gmail-agent/current/deploy/p2-nodeb-proof-bundle.sh
 
 ### Dokumentacja produktowa (ekosystem)
 
+- [`knowledge/docs/daszek-system-diagrams.md`](../knowledge/docs/daszek-system-diagrams.md) — **jeden plik** diagramów System + opisy UX (sync → UI)
+- [`knowledge/docs/case-os-target-architecture-proposal.md`](../knowledge/docs/case-os-target-architecture-proposal.md) — propozycja docelowej architektury (As-Is → To-Be, korzyści)
 - [`gmail-agent/docs/core/CONTEXT_PROJECTION_KNOWLEDGE_GRAPH.md`](gmail-agent/docs/core/CONTEXT_PROJECTION_KNOWLEDGE_GRAPH.md)
 - [`gmail-agent/docs/core/truth_flow.md`](gmail-agent/docs/core/truth_flow.md)
 - [`gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md`](gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md)

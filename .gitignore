@@ -26,6 +26,10 @@ uploads/daszek/tasks*.json
 *.swo
 *~
 
+# Python caches
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 Thumbs.db

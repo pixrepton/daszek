@@ -126,10 +126,99 @@ function daszek_api_register_v2_routes() {
         'callback' => 'daszek_api_v2_bridge_queue_complete',
         'permission_callback' => 'daszek_check_bridge_token',
     ]);
+
+    // Identity L3 merge UI (P2-14): duplicate email groups from mailbox_memory
+    register_rest_route($namespace, '/identity/suggestions', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_identity_suggestions',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/identity/merge', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_identity_merge',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    // Agent Chat legacy (UI uses v3 proxy; kept for compatibility)
+    register_rest_route($namespace, '/agent-chat', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_agent_chat',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    // Tasks (internal_task proxy to Node B)
+    register_rest_route($namespace, '/tasks', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_tasks_list',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+    register_rest_route($namespace, '/tasks', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_tasks_create',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+    register_rest_route($namespace, '/tasks/(?P<id>[a-zA-Z0-9_:-]+)/confirm', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_tasks_confirm',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+    register_rest_route($namespace, '/tasks/(?P<id>[a-zA-Z0-9_:-]+)/reject', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_tasks_reject',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+    register_rest_route($namespace, '/tasks/(?P<id>[a-zA-Z0-9_:-]+)/done', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_tasks_done',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
 }
 
 function daszek_api_register_v3_routes() {
     $namespace = 'daszek/v3';
+
+    register_rest_route($namespace, '/desk', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_desk',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/day', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_day',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/cases', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_cases',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/cases/(?P<id>[a-zA-Z0-9_:-]+)', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_case_detail',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/case-archive', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_case_archive',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/desk-notes/(?P<id>[a-zA-Z0-9_:-]+)', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_note_detail',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/ai-quality', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v2_ai_quality',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
 
     register_rest_route($namespace, '/cockpit', [
         'methods' => 'GET',
@@ -256,6 +345,137 @@ function daszek_api_register_v3_routes() {
         'callback' => 'daszek_api_v3_system_os_events_recent',
         'permission_callback' => 'daszek_check_auth',
     ]);
+
+    register_rest_route($namespace, '/system/health/status', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_health_status',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system/decision-queue', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_decision_queue',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system/constitution', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_constitution',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system/briefing', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_briefing',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system/cost-summary', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_cost_summary',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/system/quality-summary', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_quality_summary',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    // Merged timeline (3 lanes: case events + os_events + agent turns)
+    register_rest_route($namespace, '/engagements/(?P<id>[a-zA-Z0-9_:-]+)/timeline', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_engagement_timeline',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    // Learning rule candidates (Sugestie z obserwacji)
+    register_rest_route($namespace, '/learning/rule-candidates', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_learning_rule_candidates',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/learning/rule-candidates/(?P<id>[a-zA-Z0-9_:-]+)/status', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v3_learning_rule_candidate_status',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    // Identity binding suggestions (Sugestie tożsamości — C1 L3 UI)
+    register_rest_route($namespace, '/identity/binding-suggestions', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_identity_binding_suggestions',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/identity/binding-suggestions/(?P<id>[a-zA-Z0-9_:-]+)/status', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v3_identity_binding_suggestion_status',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    // Case State Summary (I3.3)
+    register_rest_route($namespace, '/cases/(?P<id>[a-zA-Z0-9_:-]+)/state-summary', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_case_state_summary',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+}
+
+function daszek_api_v2_agent_chat(WP_REST_Request $request) {
+    $body = $request->get_json_params();
+    if (!is_array($body) || empty($body['user_input'])) {
+        return new WP_Error('invalid_payload', 'Wymagane user_input.', ['status' => 400]);
+    }
+    $path = '/agent-chat';
+    $result = daszek_node_b_get_json($path, 'POST', $body);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return [
+        'ok' => true,
+        'signal_id' => $result['signal_id'] ?? '',
+        'session_id' => $result['session_id'] ?? '',
+        'user_input' => $result['user_input'] ?? '',
+        'engagement_id' => $result['engagement_id'] ?? '',
+        'case_id' => $result['case_id'] ?? '',
+        'agent_ok' => $result['agent_ok'] ?? false,
+        'warnings' => $result['warnings'] ?? [],
+        'proposals' => $result['proposals'] ?? [],
+        'hitl_required' => $result['hitl_required'] ?? false,
+    ];
+}
+
+// ── Tasks proxy callbacks ────────────────────────────────────────────
+
+function daszek_api_v2_tasks_list(WP_REST_Request $request) {
+    $qs = '';
+    if ($request->get_param('archive')) $qs = '?archive=true';
+    if ($request->get_param('status')) $qs = (strpos($qs,'?')===false?'?':'&').'status='.urlencode($request->get_param('status'));
+    $result = daszek_node_b_get_json('/tasks'.$qs, 'GET');
+    if (is_wp_error($result)) return $result;
+    return $result;
+}
+
+function daszek_api_v2_tasks_create(WP_REST_Request $request) {
+    $body = $request->get_json_params();
+    if (!is_array($body) || empty($body['title'])) return new WP_Error('invalid_payload', 'Wymagane title.', ['status' => 400]);
+    $result = daszek_node_b_get_json('/tasks', 'POST', $body);
+    if (is_wp_error($result)) return $result;
+    return $result;
+}
+
+function daszek_api_v2_tasks_confirm(WP_REST_Request $request) {
+    return daszek_node_b_get_json('/tasks/'.urlencode($request->get_param('id')).'/confirm', 'POST', $request->get_json_params() ?: []);
+}
+
+function daszek_api_v2_tasks_reject(WP_REST_Request $request) {
+    return daszek_node_b_get_json('/tasks/'.urlencode($request->get_param('id')).'/reject', 'POST', $request->get_json_params() ?: []);
+}
+
+function daszek_api_v2_tasks_done(WP_REST_Request $request) {
+    return daszek_node_b_get_json('/tasks/'.urlencode($request->get_param('id')).'/done', 'POST', []);
 }
 
 function daszek_node_b_get_json($path, $method = 'GET', $body = null) {
@@ -314,6 +534,18 @@ function daszek_api_v3_case_engagement(WP_REST_Request $request) {
     ];
 }
 
+function daszek_api_v3_case_state_summary(WP_REST_Request $request) {
+    $case_id = sanitize_text_field($request->get_param('id'));
+    if ($case_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane case_id.', ['status' => 400]);
+    }
+    $result = daszek_node_b_get_json('/cases/' . rawurlencode($case_id) . '/state-summary');
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
 function daszek_api_v3_engagement_snapshot(WP_REST_Request $request) {
     $engagement_id = sanitize_text_field($request->get_param('id'));
     if ($engagement_id === '') {
@@ -356,6 +588,149 @@ function daszek_api_v3_system_os_events_recent(WP_REST_Request $request) {
     }
     $path = '/system/os-events/recent?limit=' . $limit;
     $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_health_status(WP_REST_Request $request) {
+    $path = '/system/health/status';
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_decision_queue(WP_REST_Request $request) {
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    if ($limit > 200) {
+        $limit = 200;
+    }
+    $path = '/system/decision-queue?limit=' . $limit;
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_constitution(WP_REST_Request $request) {
+    $path = '/system/constitution';
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_briefing(WP_REST_Request $request) {
+    $path = '/system/briefing';
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_cost_summary(WP_REST_Request $request) {
+    $path = '/system/cost-summary';
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_system_quality_summary(WP_REST_Request $request) {
+    $path = '/system/quality-summary';
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_engagement_timeline(WP_REST_Request $request) {
+    $engagement_id = sanitize_text_field($request->get_param('id'));
+    if ($engagement_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane engagement_id.', ['status' => 400]);
+    }
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    if ($limit > 500) {
+        $limit = 500;
+    }
+    $path = '/engagements/' . rawurlencode($engagement_id) . '/timeline?limit=' . $limit;
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_learning_rule_candidates(WP_REST_Request $request) {
+    $status_filter = sanitize_text_field($request->get_param('status') ?? 'pending_operator');
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    $path = '/learning/rule-candidates?status=' . rawurlencode($status_filter) . '&limit=' . $limit;
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_learning_rule_candidate_status(WP_REST_Request $request) {
+    $candidate_id = sanitize_text_field($request->get_param('id'));
+    if ($candidate_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane candidate_id.', ['status' => 400]);
+    }
+    $body = $request->get_json_params();
+    if (!is_array($body)) {
+        return new WP_Error('invalid_payload', 'Wymagane JSON body.', ['status' => 400]);
+    }
+    $path = '/learning/rule-candidates/' . rawurlencode($candidate_id) . '/status';
+    $result = daszek_node_b_get_json($path, 'POST', $body);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_identity_binding_suggestions(WP_REST_Request $request) {
+    $status_filter = sanitize_text_field($request->get_param('status') ?? 'pending_operator');
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    $path = '/identity/binding-suggestions?status=' . rawurlencode($status_filter) . '&limit=' . $limit;
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_identity_binding_suggestion_status(WP_REST_Request $request) {
+    $suggestion_id = sanitize_text_field($request->get_param('id'));
+    if ($suggestion_id === '') {
+        return new WP_Error('invalid_id', 'Brak suggestion_id.', ['status' => 400]);
+    }
+    $body = $request->get_json_params();
+    if (!is_array($body)) {
+        return new WP_Error('invalid_payload', 'Wymagane JSON body.', ['status' => 400]);
+    }
+    $path = '/identity/binding-suggestions/' . rawurlencode($suggestion_id) . '/status';
+    $result = daszek_node_b_get_json($path, 'POST', $body);
     if (is_wp_error($result)) {
         return $result;
     }
@@ -1658,5 +2033,54 @@ function daszek_api_v3_system_health_snapshot_ingest(WP_REST_Request $request) {
         'ingested_at' => $ingested_at,
         'storage' => 'system_health_snapshots',
         'warnings' => [],
+    ];
+}
+
+/* --- P2-14: Identity L3 merge UI --- */
+
+function daszek_api_v2_identity_suggestions(WP_REST_Request $request) {
+    $limit = intval($request->get_param('limit') ?: 50);
+    if ($limit <= 0) { $limit = 50; }
+    $limit = min($limit, 200);
+    $result = daszek_node_b_get_json('/identity/suggestions?limit=' . $limit);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return [
+        'ok' => true,
+        'items' => isset($result['items']) && is_array($result['items']) ? $result['items'] : [],
+        'limit' => $limit,
+    ];
+}
+
+function daszek_api_v2_identity_merge(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    $body = $request->get_json_params();
+    if (!is_array($body)) {
+        return new WP_Error('invalid_payload', 'Wymagane JSON body.', ['status' => 400]);
+    }
+    $email = isset($body['email']) ? sanitize_email($body['email']) : '';
+    $target_case_id = isset($body['target_case_id']) ? sanitize_text_field($body['target_case_id']) : '';
+    $source_case_ids = isset($body['source_case_ids']) && is_array($body['source_case_ids']) ? array_map('sanitize_text_field', $body['source_case_ids']) : [];
+    if ($email === '' || $target_case_id === '' || empty($source_case_ids)) {
+        return new WP_Error('invalid_payload', 'Wymagane email, target_case_id i source_case_ids.', ['status' => 400]);
+    }
+    $result = daszek_node_b_get_json('/identity/merge', 'POST', [
+        'email' => $email,
+        'target_case_id' => $target_case_id,
+        'source_case_ids' => $source_case_ids,
+    ]);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return [
+        'ok' => true,
+        'email' => $email,
+        'target_case_id' => $target_case_id,
+        'merged_count' => count($source_case_ids),
+        'result' => $result,
     ];
 }

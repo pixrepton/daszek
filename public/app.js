@@ -47,6 +47,8 @@ const state = {
         tasks: [],
         lastIngress: { ok: false, snapshot: null, message: '' },
         systemOsEvents: { ok: false, items: [], loadError: null, loading: false },
+        decisionQueue: { ok: false, items: [], loadError: null, loading: false },
+        constitution: { ok: false, data: null, loadError: null, loading: false },
         operationalFeed: { ok: false, snapshot: null, message: '', loadError: null },
         cohortList: { ok: false, items: [], loadError: null },
         caseArchive: { ok: false, items: [], ids: [], loadError: null },
@@ -55,6 +57,19 @@ const state = {
         answers: {},
         loadingCaseId: '',
         errors: {},
+    },
+    agentChat: {
+        sessionId: '',
+        messages: [],
+        isStreaming: false,
+        streamingBuffer: '',
+        currentCaseId: '',
+        abortController: null,
+        proposals: [],
+        hitlRequired: false,
+        loadError: null,
+        loading: false,
+        hasBriefed: false,
     },
 };
 
@@ -75,19 +90,7 @@ function buildApiUrl(base, endpoint, method = 'GET') {
 
 async function apiFetch(base, endpoint, options = {}) {
     const method = (options.method || 'GET').toUpperCase();
-    const headers = {
-        'Content-Type': 'application/json',
-        ...options.headers,
-    };
-
-    if (method === 'GET') {
-        headers['Cache-Control'] = 'no-cache';
-        headers.Pragma = 'no-cache';
-    }
-
-    if (state.csrfToken && method !== 'GET') {
-        headers['X-CSRF-Token'] = state.csrfToken;
-    }
+    const headers = buildApiHeaders(method, options.headers);
 
     const response = await fetch(buildApiUrl(base, endpoint, method), {
         ...options,
@@ -119,6 +122,22 @@ async function apiFetch(base, endpoint, options = {}) {
     return parsedBody !== null ? parsedBody : rawBody;
 }
 
+function buildApiHeaders(method, extraHeaders) {
+    const headers = {
+        'Content-Type': 'application/json',
+        ...(extraHeaders || {}),
+    };
+    const upper = (method || 'GET').toUpperCase();
+    if (upper === 'GET') {
+        headers['Cache-Control'] = 'no-cache';
+        headers.Pragma = 'no-cache';
+    }
+    if (state.csrfToken && upper !== 'GET') {
+        headers['X-CSRF-Token'] = state.csrfToken;
+    }
+    return headers;
+}
+
 function showLoginScreen() {
     document.getElementById('login-screen').style.display = 'grid';
     document.getElementById('main-screen').style.display = 'none';
@@ -128,6 +147,12 @@ function showMainScreen() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('main-screen').style.display = 'block';
     document.getElementById('current-user').textContent = state.currentUser || 'operator';
+    // Onboarding: show wizard on first login
+    try {
+        if (!localStorage.getItem('daszek-onboarding-done')) {
+            setTimeout(showOnboardingWizard, 500);
+        }
+    } catch (_) { /* ignore */ }
 }
 
 function showError(message) {
@@ -142,16 +167,17 @@ function clearError() {
     box.style.display = 'none';
 }
 
-function showToast(message) {
-    const host = document.getElementById('toast-host');
-    const toast = document.createElement('div');
+function showToast(message, type) {
+    var host = document.getElementById('toast-host');
+    var toast = document.createElement('div');
     toast.className = 'toast';
+    if (type) { toast.classList.add('toast--' + type); }
     toast.textContent = message;
     host.appendChild(toast);
-    setTimeout(() => toast.classList.add('toast-visible'), 10);
-    setTimeout(() => {
+    setTimeout(function () { toast.classList.add('toast-visible'); }, 10);
+    setTimeout(function () {
         toast.classList.remove('toast-visible');
-        setTimeout(() => toast.remove(), 250);
+        setTimeout(function () { toast.remove(); }, 250);
     }, 2600);
 }
 
@@ -164,6 +190,21 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text ?? '';
     return div.innerHTML;
+}
+
+function sanitizeMarkdownHref(href) {
+    const raw = String(href || '').trim();
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw, window.location.origin);
+        const scheme = (parsed.protocol || '').toLowerCase();
+        if (scheme === 'http:' || scheme === 'https:' || scheme === 'mailto:') {
+            return parsed.href;
+        }
+    } catch (_) {
+        /* invalid URL */
+    }
+    return '';
 }
 
 function formatDate(value) {
@@ -281,7 +322,7 @@ function wrapDaszekViewShell(viewTrailLabels, innerHtml, metaLineHtml = '') {
         ? `<p class="ds-meta-line detail-muted">${metaLineHtml}</p>`
         : '';
     return `
-        <div class="ds-view-shell">
+        <div class="ds-view-shell view-fade-in">
             <nav class="ds-breadcrumb" aria-label="Ścieżka widoku">${crumbHtml}</nav>
             ${metaBlock}
             ${innerHtml}
@@ -318,7 +359,7 @@ function projectionSectionMissingPreview() {
 }
 
 const PRIMARY_VIEW_TABS = ['desk', 'cases', 'day', 'archive', 'tasks'];
-const MORE_VIEW_TABS = ['cockpit', 'quality', 'system', 'last_ingress', 'cohort_runs'];
+const MORE_VIEW_TABS = ['cockpit', 'quality', 'system', 'last_ingress', 'cohort_runs', 'decisions', 'constitution'];
 
 function isGatebTestArtifact(item) {
     if (!item || typeof item !== 'object') {
@@ -676,16 +717,16 @@ function renderNoteFeedbackBlock(note) {
             <h3>Ocena jakości AI</h3>
             <p class="detail-muted">Czy AI trafnie wyłowiło tę sprawę? Twoja ocena uczy model — nie wysyła nic do klienta.</p>
             <div class="feedback-grid feedback-grid--primary">
-                <button type="button" class="btn btn-ghost btn-small" data-note-action="trafne" data-note-id="${escapeHtml(noteId)}" title="Słusznie trafiło na biurko">👍 Trafne</button>
-                <button type="button" class="btn btn-secondary btn-small" data-note-action="zla_sprawa" data-note-id="${escapeHtml(noteId)}" title="To nie powinno tu trafić / błędna klasyfikacja">👎 Nietrafione</button>
+                <button type="button" class="btn btn-ghost btn-small" data-note-action="trafne" data-note-id="${escapeHtml(noteId)}" data-tooltip="Slusznie trafilo na biurko">&#128077; Trafne</button>
+                <button type="button" class="btn btn-secondary btn-small" data-note-action="zla_sprawa" data-note-id="${escapeHtml(noteId)}" data-tooltip="To nie powinno tu trafic / bledna klasyfikacja">&#128078; Nietrafione</button>
             </div>
             <details class="detail-tech detail-collapsible">
                 <summary>Dokładniejsza ocena</summary>
                 <div class="detail-tech-body feedback-grid">
-                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_mocne" data-note-id="${escapeHtml(noteId)}" title="Priorytet zawyżony">Za wysoki priorytet</button>
-                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_slabe" data-note-id="${escapeHtml(noteId)}" title="Priorytet zaniżony">Za niski priorytet</button>
-                    <button type="button" class="btn btn-ghost btn-small" data-note-action="nie_pokazuj_takich" data-note-id="${escapeHtml(noteId)}" title="Wycisz podobne w przyszłości">Nie pokazuj podobnych</button>
-                    ${note.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-note-merge="${escapeHtml(noteId)}" title="Scal z istniejącą sprawą">Połącz ze sprawą</button>` : ''}
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_mocne" data-note-id="${escapeHtml(noteId)}" data-tooltip="Priorytet zawyżony">Za wysoki priorytet</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="za_slabe" data-note-id="${escapeHtml(noteId)}" data-tooltip="Priorytet zanizony">Za niski priorytet</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-note-action="nie_pokazuj_takich" data-note-id="${escapeHtml(noteId)}" data-tooltip="Wycisz podobne w przyszlosci">Nie pokazuj podobnych</button>
+                    ${note.case_id ? `<button type="button" class="btn btn-ghost btn-small" data-note-merge="${escapeHtml(noteId)}" data-tooltip="Scal z istniejaca sprawa">Polacz ze sprawa</button>` : ''}
                 </div>
             </details>
         </section>`;
@@ -1034,7 +1075,7 @@ function buildNoteDetailPayloadFromFeedDeskItem(item) {
 
 async function refreshCaseArchiveIndex() {
     try {
-        const payload = await apiFetch(V2_API_BASE, '/case-archive');
+        const payload = await apiFetch(V3_API_BASE, '/case-archive');
         const items = Array.isArray(payload.items) ? payload.items : [];
         const ids = Array.isArray(payload.ids)
             ? payload.ids
@@ -1826,9 +1867,12 @@ async function tryRestoreSession() {
         return false;
     }
     try {
-        const desk = await apiFetch(V2_API_BASE, '/desk');
-        if (desk && typeof desk === 'object' && desk.ok !== false) {
-            state.currentUser = state.currentUser || 'operator';
+        const me = await apiFetch(V1_API_BASE, '/me');
+        if (me && me.ok && me.user) {
+            state.currentUser = me.user;
+            if (me.csrf_token) {
+                state.csrfToken = me.csrf_token;
+            }
             showMainScreen();
             await loadAllData();
             return true;
@@ -1888,16 +1932,16 @@ async function loadAllData() {
         setViewHeader('Ładuję zasilenie Daszka…', 'Pobieranie projekcji operational feed, biurka i ingressu (read-only).');
 
         const requests = await Promise.allSettled([
-            apiFetch(V2_API_BASE, '/desk'),
+            apiFetch(V3_API_BASE, '/desk'),
             apiFetch(V3_API_BASE, '/cockpit'),
-            apiFetch(V2_API_BASE, '/day'),
-            apiFetch(V2_API_BASE, '/cases'),
-            apiFetch(V2_API_BASE, '/ai-quality'),
-            apiFetch(V1_API_BASE, '/tasks'),
+            apiFetch(V3_API_BASE, '/day'),
+            apiFetch(V3_API_BASE, '/cases'),
+            apiFetch(V3_API_BASE, '/ai-quality'),
+            apiFetch(V2_API_BASE, '/tasks'),
             apiFetch(V3_API_BASE, '/operational-feed-snapshots/latest'),
             apiFetch(V3_API_BASE, '/ingress-quality-snapshots/latest'),
             apiFetch(V3_API_BASE, '/cohort-runs'),
-            apiFetch(V2_API_BASE, '/case-archive'),
+            apiFetch(V3_API_BASE, '/case-archive'),
         ]);
 
         const [deskResult, cockpitResult, dayResult, casesResult, qualityResult, tasksResult, operationalResult, lastIngressResult, cohortListResult, caseArchiveResult] = requests;
@@ -2002,7 +2046,7 @@ async function loadAllData() {
     }
 }
 
-const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'system', 'last_ingress', 'cohort_runs']);
+const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'system', 'last_ingress', 'cohort_runs', 'chat', 'decisions', 'constitution']);
 
 function normalizeMainViewId(raw) {
     const id = String(raw || '').trim();
@@ -2070,6 +2114,18 @@ function viewConfig() {
             title: 'System',
             subtitle: 'Oś zdarzeń cross-repo (Node B) — projekcja read-only, nie magazyn prawdy.',
         },
+        chat: {
+            title: 'Czat',
+            subtitle: 'Rozmowa z agentem AI — wydawaj polecenia, pytaj o sprawy, zarzadzaj systemem.',
+        },
+        decisions: {
+            title: 'Kolejka decyzji',
+            subtitle: 'Decyzje oczekujace na operatora — zatwierdz, odrzuc lub przegladaj szczegoly.',
+        },
+        constitution: {
+            title: 'Konstytucja',
+            subtitle: 'Dokument konstytucji systemu Case OS — reguly, narzedzia i granice dzialania agenta.',
+        },
     };
 }
 
@@ -2096,6 +2152,31 @@ function installDaszekNavHandlers() {
         }
         const button = event.target.closest('.nav-link, .view-tab');
         if (!button || !app.contains(button)) {
+            // Check for other interactive elements
+            const osEventItem = event.target.closest('.os-event-item');
+            if (osEventItem && app.contains(osEventItem)) {
+                var eventId = osEventItem.getAttribute('data-os-event-id');
+                if (eventId) {
+                    openOsEventDetail(eventId);
+                }
+                return;
+            }
+            const openCaseBtn = event.target.closest('[data-open-case]');
+            if (openCaseBtn && app.contains(openCaseBtn)) {
+                var caseId = openCaseBtn.getAttribute('data-open-case');
+                if (caseId) {
+                    openCaseDetail(caseId);
+                }
+                return;
+            }
+            const viewDecisionBtn = event.target.closest('[data-view-decision]');
+            if (viewDecisionBtn && app.contains(viewDecisionBtn)) {
+                var decisionId = viewDecisionBtn.getAttribute('data-view-decision');
+                if (decisionId) {
+                    openDecisionDetail(decisionId);
+                }
+                return;
+            }
             return;
         }
         const next = resolveNavButtonViewId(button);
@@ -2219,6 +2300,12 @@ function renderCurrentView() {
         void startSystemViewLoad();
     } else if (viewKey === 'cohort_runs') {
         renderCohortRunsView();
+    } else if (viewKey === 'chat') {
+        void startChatViewLoad();
+    } else if (viewKey === 'decisions') {
+        void startDecisionQueueViewLoad();
+    } else if (viewKey === 'constitution') {
+        void startConstitutionViewLoad();
     } else {
         renderTasksView();
     }
@@ -2998,6 +3085,7 @@ async function startSystemViewLoad() {
         };
     }
     renderSystemView();
+    initMermaidDiagrams();
 }
 
 function renderSystemHealthStrip(snapshot) {
@@ -3059,7 +3147,8 @@ function renderSystemView() {
         const status = String((ev.payload && ev.payload.status) || ev.status || 'ok').trim();
         const statusClass = status === 'error' ? 'is-error' : (status === 'warning' ? 'is-warning' : 'is-ok');
         const typeLabel = String(ev.event_type || '').trim();
-        return `<li class="os-event-row ${statusClass}">
+        const eventId = String(ev.event_id || '').trim();
+        return `<li class="os-event-row ${statusClass} os-event-item" data-os-event-id="${escapeHtml(eventId)}" data-engagement-id="${escapeHtml(eid)}" tabindex="0" role="button" aria-label="Kliknij po szczególy: ${escapeHtml(summary.slice(0, 60))}">
             <div class="os-event-head">
                 <time datetime="${escapeHtml(String(ev.occurred_at || ''))}">${escapeHtml(when)}</time>
                 ${repo ? `<span class="record-badge os-event-repo">${escapeHtml(repo)}</span>` : ''}
@@ -3076,7 +3165,44 @@ function renderSystemView() {
             <p class="detail-muted">Read-only timeline zdarzeń cross-repo (Node B). Nie zastępuje dziennika sprawy ani workflow Cieplo w jego DB.</p>
             ${items.length ? `<ul class="os-event-list">${rows}</ul>` : '<p class="detail-muted">Brak zdarzeń systemowych.</p>'}
         </section>
+        ${renderSystemDiagramsSection()}
     `);
+}
+
+function renderSystemDiagramsSection() {
+    const manifest = window.DASZEK_SYSTEM_DIAGRAMS_MANIFEST;
+    if (!manifest || !manifest.globalSection || !Array.isArray(manifest.globalSection.diagrams)) {
+        return '';
+    }
+    const diagrams = manifest.globalSection.diagrams;
+    const diagramCards = diagrams.map((d, idx) => {
+        const mermaidCode = d.mermaid || d.mermaidDoc || '';
+        if (!mermaidCode) return '';
+        const safeId = `mermaid-diagram-${idx}`;
+        return `<div class="system-diagram-card">
+            <h4>${escapeHtml(d.title || 'Diagram ' + (idx + 1))}</h4>
+            <p class="detail-muted">${escapeHtml(d.caption || '')}</p>
+            <pre class="mermaid" id="${safeId}">${mermaidCode}</pre>
+        </div>`;
+    }).filter(Boolean).join('');
+    if (!diagramCards) return '';
+    return `<section class="detail-section detail-section-diagrams">
+        <h3>Diagramy architektury</h3>
+        <p class="detail-muted">${escapeHtml(manifest.globalSection.intro || '')}</p>
+        ${diagramCards}
+    </section>`;
+}
+
+function initMermaidDiagrams() {
+    if (typeof mermaid === 'undefined') {
+        return;
+    }
+    try {
+        mermaid.initialize({ startOnLoad: false, theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default' });
+        mermaid.run({ querySelector: '.mermaid' });
+    } catch (e) {
+        console.warn('Mermaid init error:', e);
+    }
 }
 
 function renderLastIngressView() {
@@ -3235,75 +3361,101 @@ function renderLastIngressView() {
 }
 
 function renderTasksView() {
-    const root = document.getElementById('view-root');
-    const op = state.data.operationalFeed || {};
+    var root = document.getElementById('view-root');
+    if (!root) return;
+    root.innerHTML = '<section class="section-block"><h3>Zadania</h3><p class="detail-muted">Ładowanie...</p></section>';
+    loadTasksIntoView();
+}
 
-    if (op.loadError) {
-        root.innerHTML = wrapOperationalViewShell('Zadania', `
-            <section class="empty-state ds-state ds-state--error" role="alert">
-                <h3>Nie udało się pobrać operational feed</h3>
-                <p>${escapeHtml(op.loadError)}</p>
-            </section>
-        `);
-        return;
-    }
+function loadTasksIntoView() {
+    var root = document.getElementById('view-root');
+    apiFetch(V2_API_BASE, '/tasks', {}).then(function (data) {
+        if (!data || !data.ok) { root.innerHTML = '<p>Błąd: ' + escapeHtml((data && data.error) || 'nieznany') + '</p>'; return; }
+        renderTasksContent(data.tasks || []);
+    }).catch(function (err) { root.innerHTML = '<p>Błąd: ' + escapeHtml(err.message) + '</p>'; });
+}
 
-    if (!hasOperationalFeedSnapshot()) {
-        root.innerHTML = wrapOperationalViewShell('Zadania', `
-            <section class="empty-state ds-state">
-                <h3>Brak zasilenia zadań z Node B</h3>
-                <p>Zadania w tym widoku pochodzą z operational feed. Legacy zadania v1 pozostają dostępne po wgraniu feedu z listą zadań lub użyj panelu zgodności.</p>
-                <details class="detail-tech detail-collapsible">
-                    <summary>Ręczne zadania v1 (magazyn legacy)</summary>
-                    <div class="detail-tech-body">
-                        <p class="detail-muted">Ta akcja zapisuje się w magazynie v1 na Node A — nie w migawce operational feed.</p>
-                        ${renderManualTaskFormHtml()}
-                        <div class="task-list">${(state.data.tasks || []).filter(task => matchesSearch([task.title, task.note, task.kind, task.source])).map(renderTaskRow).join('') || '<p class="detail-muted">Brak zadań v1.</p>'}</div>
-                    </div>
-                </details>
-            </section>
-        `);
-        return;
-    }
+function renderTasksContent(tasks) {
+    var root = document.getElementById('view-root');
+    var confident = tasks.filter(function (t) { return t.source_kind === 'agent_confident' && t.task_status === 'pending'; });
+    var active = tasks.filter(function (t) { return t.task_status === 'confirmed'; });
+    var uncertain = tasks.filter(function (t) { return t.source_kind === 'agent_uncertain' && t.task_status === 'pending'; });
 
-    const feed = getOperationalFeed();
-    const feedTasks = (feed.tasks || []).filter(task => matchesSearch([
-        task.title,
-        task.summary,
-        task.note,
-        task.source_type,
-        task.linked_case_id,
-    ]));
+    var html = '<div class="section-block">';
+    html += '<div class="section-header"><div><h3>Zadania</h3><p>Sprawy operacyjne i firmowe — leady HVAC osobno w Biurku.</p></div>';
+    html += '<button id="task-new-btn" class="btn btn-primary btn-small">+ Nowe zadanie</button></div>';
 
-    const feedBody = feedTasks.length
-        ? `<div class="operational-list">${feedTasks.map(t => renderFeedTaskRow(t, { compact: false })).join('')}</div>`
-        : `
-            <section class="empty-state ds-state compact">
-                <h3>Brak zadań w aktualnym snapshotcie</h3>
-                <p>Operational feed nie zawiera zadań lub filtr wyszukiwania ukrywa wyniki.</p>
-            </section>
-        `;
+    html += '<div id="task-new-form" style="display:none; margin:12px 0; padding:12px; border:1px solid #ccc; border-radius:8px;">';
+    html += '<label><span>Tytuł</span><input type="text" id="task-title" placeholder="Np. Firmowe auto — naprawić hamulec" style="width:100%;padding:8px;"></label>';
+    html += '<div style="display:flex;gap:8px;margin-top:8px;"><label><span>Priorytet</span><select id="task-priority"><option value="normalny" selected>normalny</option><option value="pilne">pilne</option><option value="niski">niski</option></select></label>';
+    html += '<label><span>Data/godzina (opcjonalnie)</span><input type="text" id="task-scheduled" placeholder="np. 2026-07-05 11:00" style="padding:8px;"></label></div>';
+    html += '<div style="margin-top:8px;"><button id="task-create-btn" class="btn btn-primary">Dodaj</button><button id="task-cancel-btn" class="btn btn-ghost">Anuluj</button></div>';
+    html += '</div>';
 
-    root.innerHTML = wrapOperationalViewShell('Zadania', `
-        <section class="tasks-fallback">
-            <div class="section-header">
-                <div>
-                    <h3>Zadania (operational feed)</h3>
-                    <p>Zadania z migawki Node B. Wykonanie akcji nadal wymaga ścieżek polityki — UI nie uruchamia automatycznych działań.</p>
-                </div>
-            </div>
-            ${projectionBoundaryHtml()}
-            ${feedBody}
-            <details class="detail-tech detail-collapsible">
-                <summary>Ręczne zadania v1 (legacy)</summary>
-                <div class="detail-tech-body">
-                    <p class="detail-muted">Zapisuje się w magazynie zadań v1 — poza migawką operational feed.</p>
-                    ${renderManualTaskFormHtml()}
-                    <div class="task-list">${(state.data.tasks || []).filter(task => matchesSearch([task.title, task.note, task.kind, task.source])).map(renderTaskRow).join('') || '<p class="detail-muted">Brak zadań v1.</p>'}</div>
-                </div>
-            </details>
-        </section>
-    `);
+    html += '<div style="margin-top:16px;"><h4>Do potwierdzenia (od agenta)</h4>';
+    if (confident.length) { confident.forEach(function (t) { html += taskCardHtml(t, 'pending'); }); }
+    else { html += '<p class="detail-muted">Brak zadań do potwierdzenia.</p>'; }
+    html += '</div>';
+
+    html += '<div style="margin-top:16px;"><h4>Do zrobienia</h4>';
+    if (active.length) { active.sort(function (a, b) { return (a.priority === 'pilne' ? -1 : 0) - (b.priority === 'pilne' ? -1 : 0); }).forEach(function (t) { html += taskCardHtml(t, 'active'); }); }
+    else { html += '<p class="detail-muted">Brak aktywnych zadań.</p>'; }
+    html += '</div>';
+
+    html += '<div style="margin-top:16px;"><h4>Sugestie agenta (niepewne)</h4>';
+    if (uncertain.length) { uncertain.forEach(function (t) { html += taskCardHtml(t, 'uncertain'); }); }
+    else { html += '<p class="detail-muted">Brak sugestii.</p>'; }
+    html += '</div>';
+
+    html += '<details style="margin-top:16px;"><summary>Pokaż archiwum</summary><div id="task-archive" style="margin-top:8px;">';
+    html += '<button id="task-archive-load" class="btn btn-ghost btn-small">Załaduj archiwum</button></div></details>';
+    html += '</div>';
+    root.innerHTML = html;
+
+    document.getElementById('task-new-btn').addEventListener('click', function () { document.getElementById('task-new-form').style.display = 'block'; });
+    document.getElementById('task-cancel-btn').addEventListener('click', function () { document.getElementById('task-new-form').style.display = 'none'; });
+    document.getElementById('task-create-btn').addEventListener('click', function () { void createManualTask(); });
+    document.getElementById('task-archive-load').addEventListener('click', loadArchive);
+    bindTaskButtons();
+}
+
+function taskCardHtml(task, mode) {
+    var pr = task.priority, pc = pr === 'pilne' ? '#ef4444' : pr === 'normalny' ? '#6b7280' : '#9ca3af';
+    var src = task.source_kind === 'agent_confident' ? '🤖 Agent' : task.source_kind === 'agent_uncertain' ? '🤖 Agent (niepewny)' : '👤 Operator';
+    var taskId = task.id || task.task_id || task.case_id || '';
+    var html = '<div style="display:flex;align-items:flex-start;gap:8px;padding:10px;margin:6px 0;border-radius:8px;border:1px solid #d1d5db;background:' + (mode === 'pending' ? '#fefce8' : '#fff') + ';">';
+    html += '<span style="color:' + pc + ';font-size:18px;">' + (pr === 'pilne' ? '🔴' : pr === 'normalny' ? '🟡' : '⚪') + '</span>';
+    html += '<div style="flex:1;"><strong>' + escapeHtml(task.task_title || task.case_id) + '</strong>';
+    html += '<div style="font-size:12px;color:#6b7280;">' + src + (task.scheduled_at ? ' · 📅 ' + task.scheduled_at : '') + '</div></div>';
+    html += '<div style="display:flex;gap:4px;flex-shrink:0;">';
+    if (mode === 'pending') { html += '<button class="btn btn-primary btn-small task-confirm" data-id="' + escapeHtml(taskId) + '">Potwierdź</button><button class="btn btn-ghost btn-small task-reject" data-id="' + escapeHtml(taskId) + '">Odrzuć</button>'; }
+    else if (mode === 'active') { html += '<button class="btn btn-ghost btn-small task-done" data-id="' + escapeHtml(taskId) + '">Zrobione</button>'; }
+    else { html += '<button class="btn btn-ghost btn-small task-done" data-id="' + escapeHtml(taskId) + '">Zrobione</button><button class="btn btn-ghost btn-small task-reject" data-id="' + escapeHtml(taskId) + '">Odrzuć</button>'; }
+    html += '</div></div>'; return html;
+}
+
+function bindTaskButtons() {
+    document.querySelectorAll('.task-confirm').forEach(function (b) { b.addEventListener('click', function () { showTaskFeedback(b.dataset.id, 'confirm'); }); });
+    document.querySelectorAll('.task-reject').forEach(function (b) { b.addEventListener('click', function () { showTaskFeedback(b.dataset.id, 'reject'); }); });
+    document.querySelectorAll('.task-done').forEach(function (b) { b.addEventListener('click', function () { void markTaskDone(b.dataset.id); }); });
+}
+
+function showTaskFeedback(cid, action) {
+    var fb = prompt(action === 'confirm' ? 'Potwierdzasz — wiadomość dla agenta (opcjonalnie):' : 'Odrzucasz — wiadomość dla agenta (opcjonalnie):');
+    if (fb === null) return;
+    apiFetch(V2_API_BASE, '/tasks/' + cid + '/' + (action === 'confirm' ? 'confirm' : 'reject'), { method: 'POST', body: JSON.stringify({ feedback: fb || '' }) })
+        .then(function () { loadTasksIntoView(); })
+        .catch(function (err) { showToast('Nie udalo sie zapisac decyzji: ' + err.message, 'error'); });
+}
+
+function loadArchive() {
+    var d = document.getElementById('task-archive');
+    apiFetch(V2_API_BASE, '/tasks?archive=true', {}).then(function (data) {
+        if (!data || !data.ok) { d.innerHTML = '<p class="detail-muted">Brak archiwum.</p>'; return; }
+        var tasks = data.tasks || []; if (!tasks.length) { d.innerHTML = '<p class="detail-muted">Archiwum puste.</p>'; return; }
+        var h = ''; tasks.forEach(function (t) { h += '<div style="padding:8px;border-bottom:1px solid #e5e7eb;">' + escapeHtml(t.task_title || t.case_id) + ' <span style="color:#6b7280;">' + (t.task_status === 'rejected' ? '❌ Odrzucone' : '✅ Zrobione') + ' · ' + (t.updated_at || t.created_at).substring(0, 10) + '</span></div>'; });
+        d.innerHTML = h;
+    });
 }
 
 function renderManualTaskFormHtml() {
@@ -3434,8 +3586,8 @@ async function openNoteDetail(noteId) {
     setDetailPanelChromeOpen(true);
     renderDetailPanel();
     try {
-        const detail = await apiFetch(V2_API_BASE, `/desk-notes/${encodeURIComponent(nid)}`);
-        state.detail = { type: 'note', payload: detail, source: 'v2_live' };
+        const detail = await apiFetch(V3_API_BASE, `/desk-notes/${encodeURIComponent(nid)}`);
+        state.detail = { type: 'note', payload: detail, source: 'v3_live' };
         renderDetailPanel();
     } catch (error) {
         const st = Number(error.status || 0);
@@ -3477,7 +3629,7 @@ async function openCaseDetail(caseId) {
     setDetailPanelChromeOpen(true);
     renderDetailPanel();
     try {
-        const detail = await apiFetch(V2_API_BASE, `/cases/${encodeURIComponent(cid)}`);
+        const detail = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(cid)}`);
         let engagementSummary = null;
         try {
             const eng = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(cid)}/engagement`);
@@ -3485,7 +3637,7 @@ async function openCaseDetail(caseId) {
         } catch (_engErr) {
             engagementSummary = null;
         }
-        state.detail = { type: 'case', payload: detail, engagement: engagementSummary, source: 'v2_live' };
+        state.detail = { type: 'case', payload: detail, engagement: engagementSummary, source: 'v3_live' };
         renderDetailPanel();
         void refreshCaseDetailOsEvents();
     } catch (error) {
@@ -3771,8 +3923,8 @@ function renderHitlOperatorActions(caseItem, payload) {
            ${asks.length ? `<ul class="ds-ask">${asks.map(q => `<li>${escapeHtml(String(q))}</li>`).join('')}</ul>` : ''}`;
     // Oś: odpowiedź do klienta. "Wyślij" = realna odpowiedź (primary). "Zatwierdź bez wysyłki" = akceptacja planu agenta.
     const primaryAction = hasDraft
-        ? `<button type="button" class="btn btn-primary" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" title="Wyślij tę odpowiedź do klienta">Wyślij odpowiedź</button>`
-        : `<button type="button" class="btn btn-primary" disabled title="Najpierw potrzebny jest draft odpowiedzi">Wyślij odpowiedź (brak draftu)</button>`;
+        ? `<button type="button" class="btn btn-primary" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Wyslij ta odpowiedz do klienta">Wyslij odpowiedz</button>`
+        : `<button type="button" class="btn btn-primary" disabled data-tooltip="Najpierw potrzebny jest draft odpowiedzi">Wyslij odpowiedz (brak draftu)</button>`;
     return `
         <section class="detail-section detail-section-actions detail-section-reply">
             <h3>Odpowiedź do klienta</h3>
@@ -3780,7 +3932,7 @@ function renderHitlOperatorActions(caseItem, payload) {
             ${draftBlock}
             <div class="hitl-actions">
                 ${primaryAction}
-                <button type="button" class="btn btn-ghost btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" title="Zatwierdź plan agenta bez wysyłki maila">Zatwierdź bez wysyłki</button>
+                <button type="button" class="btn btn-ghost btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Zatwierdz plan agenta bez wysylki maila">Zatwierdz bez wysylki</button>
             </div>
         </section>`;
 }
@@ -4286,7 +4438,8 @@ function renderOsEventsSection(osEventsBundle) {
         const when = formatDate(ev.occurred_at || '');
         const status = String((ev.payload && ev.payload.status) || ev.status || 'ok').trim();
         const statusClass = status === 'error' ? 'is-error' : (status === 'warning' ? 'is-warning' : 'is-ok');
-        return `<li class="os-event-row ${statusClass}">
+        const eventId = String(ev.event_id || '').trim();
+        return `<li class="os-event-row ${statusClass} os-event-item" data-os-event-id="${escapeHtml(eventId)}" tabindex="0" role="button" aria-label="Kliknij po szczególy">
             <div class="os-event-head">
                 <time datetime="${escapeHtml(String(ev.occurred_at || ''))}">${escapeHtml(when)}</time>
                 ${repo ? `<span class="record-badge os-event-repo">${escapeHtml(repo)}</span>` : ''}
@@ -4620,13 +4773,7 @@ function renderSkrzatPanel(caseItem, payload) {
 
 async function askSkrzat(caseId, form) {
     const cid = String(caseId || '').trim();
-    const base = nodeBApiBase();
     if (!cid) {
-        return;
-    }
-    if (!base) {
-        state.skrzat.errors[cid] = 'Brak konfiguracji Node B API base dla Skrzata.';
-        renderDetailPanel();
         return;
     }
     const formData = new FormData(form);
@@ -4641,17 +4788,10 @@ async function askSkrzat(caseId, form) {
     state.skrzat.errors[cid] = '';
     renderDetailPanel();
     try {
-        const url = `${base}/cases/${encodeURIComponent(cid)}/skrzat/ask`;
-        const response = await fetch(url, {
+        const body = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(cid)}/skrzat/ask`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
             body: JSON.stringify({ question, mode, query_text: question }),
         });
-        const body = await response.json().catch(() => null);
-        if (!response.ok) {
-            throw new Error(body && (body.detail || body.message) ? String(body.detail || body.message) : `Node B HTTP ${response.status}`);
-        }
         if (!body || body.schema_version !== 'conversation_answer_envelope.v1') {
             throw new Error('Nieprawidłowy envelope odpowiedzi Skrzata.');
         }
@@ -4699,6 +4839,14 @@ function renderDetailPanel() {
                 </div>
             </div>
         `;
+        scheduleDetailPanelFocus();
+        return;
+    }
+
+    // Custom HTML detail (used by OS Event detail, tooltip-rich content)
+    if (state.detail._customHtml) {
+        setDetailPanelChromeOpen(true);
+        panel.innerHTML = state.detail._customHtml;
         scheduleDetailPanelFocus();
         return;
     }
@@ -4861,7 +5009,7 @@ function renderDetailPanel() {
                 <div class="detail-header-actions">
                     ${caseItem.case_id ? (isCaseArchived(caseItem.case_id)
             ? `<button type="button" class="btn btn-secondary btn-small" data-unarchive-case="${escapeHtml(caseItem.case_id)}">Przywróć z archiwum</button>`
-            : `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(caseItem.case_id)}" title="Ukryj sprawę z aktywnej listy">Archiwizuj</button>`) : '<span class="detail-muted" title="Brak powiązanej sprawy w magazynie">Archiwizacja niedostępna</span>'}
+            : `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(caseItem.case_id)}" data-tooltip="Ukryj sprawe z aktywnej listy">Archiwizuj</button>`) : '<span class="detail-muted" data-tooltip="Brak powiazanej sprawy w magazynie">Archiwizacja niedostepna</span>'}
                     <button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij panel szczegółów">Zamknij</button>
                 </div>
             </div>
@@ -5049,49 +5197,57 @@ async function decideActionProposal(proposalId, decision) {
 
 async function markTaskDone(taskId) {
     try {
-        await apiFetch(V1_API_BASE, `/tasks/${taskId}/done`, { method: 'POST' });
+        await apiFetch(V2_API_BASE, `/tasks/${taskId}/done`, { method: 'POST' });
         showToast('Zadanie zostało oznaczone jako załatwione.');
-        await loadAllData();
+        if (normalizeMainViewId(state.currentView) === 'tasks') {
+            loadTasksIntoView();
+        } else {
+            await loadAllData();
+        }
     } catch (error) {
         showError(error.message);
     }
 }
 
 async function editTaskDue(taskId) {
-    const current = (state.data.tasks || []).find(task => task.id === taskId);
-    const nextDate = window.prompt('Podaj termin w formacie RRRR-MM-DD', current?.due_at || '');
-    if (nextDate === null) {
-        return;
-    }
-    try {
-        await apiFetch(V1_API_BASE, `/tasks/${taskId}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ due_at: nextDate || null }),
-        });
-        showToast('Termin został zapisany.');
-        await loadAllData();
-    } catch (error) {
-        showError(error.message);
-    }
+    showError('Edycja terminu zadania wymaga endpointu v2 i jest chwilowo niedostępna.');
 }
 
 async function createManualTask(formData) {
+    const hasFormData = formData && typeof formData.get === 'function';
+    const title = hasFormData ? formData.get('title') : document.getElementById('task-title')?.value.trim();
+    if (!title) {
+        showError('Podaj tytuł zadania.');
+        return;
+    }
     const data = {
-        title: formData.get('title'),
-        due_at: formData.get('due_at') || null,
-        priority: formData.get('priority') || 'medium',
-        note: formData.get('note') || null,
+        title,
+        priority: hasFormData ? (formData.get('priority') || 'normalny') : document.getElementById('task-priority')?.value || 'normalny',
+        scheduled_at: hasFormData ? (formData.get('scheduled_at') || formData.get('due_at') || '') : document.getElementById('task-scheduled')?.value.trim() || '',
+        note: hasFormData ? (formData.get('note') || '') : '',
         kind: 'task',
     };
 
     try {
-        await apiFetch(V1_API_BASE, '/tasks', {
+        await apiFetch(V2_API_BASE, '/tasks', {
             method: 'POST',
             body: JSON.stringify(data),
         });
         showToast('Ręczne zadanie zostało dodane.');
-        document.getElementById('manual-task-form').reset();
-        await loadAllData();
+        document.getElementById('manual-task-form')?.reset();
+        if (!hasFormData) {
+            var taskForm = document.getElementById('task-new-form');
+            var titleInput = document.getElementById('task-title');
+            var scheduledInput = document.getElementById('task-scheduled');
+            if (titleInput) titleInput.value = '';
+            if (scheduledInput) scheduledInput.value = '';
+            if (taskForm) taskForm.style.display = 'none';
+        }
+        if (normalizeMainViewId(state.currentView) === 'tasks') {
+            loadTasksIntoView();
+        } else {
+            await loadAllData();
+        }
     } catch (error) {
         showError(error.message);
     }
@@ -5125,6 +5281,26 @@ document.addEventListener('DOMContentLoaded', () => {
             await startLastIngressViewLoad();
             return;
         }
+        if (view === 'system') {
+            await startSystemViewLoad();
+            return;
+        }
+        if (view === 'decisions') {
+            await startDecisionQueueViewLoad();
+            return;
+        }
+        if (view === 'constitution') {
+            await startConstitutionViewLoad();
+            return;
+        }
+        if (view === 'chat') {
+            await startChatViewLoad();
+            return;
+        }
+        if (view === 'tasks') {
+            loadTasksIntoView();
+            return;
+        }
         await loadAllData();
     });
 
@@ -5135,6 +5311,33 @@ document.addEventListener('DOMContentLoaded', () => {
             renderCurrentView();
         });
     }
+
+    // Onboarding button delegation (attached to document since wizard is outside #app)
+    document.addEventListener('click', function (onboardingClick) {
+        var nextBtn = onboardingClick.target.closest('#onboarding-next');
+        if (nextBtn) {
+            var currentStep = 0;
+            var dots = document.querySelectorAll('.onboarding-step-dot--active');
+            if (dots.length) {
+                var allDots = document.querySelectorAll('.onboarding-step-dot');
+                for (var di = 0; di < allDots.length; di++) {
+                    if (allDots[di] === dots[0]) { currentStep = di; break; }
+                }
+            }
+            advanceOnboarding(currentStep);
+            return;
+        }
+        var skipBtn = onboardingClick.target.closest('#onboarding-skip');
+        if (skipBtn) {
+            completeOnboarding();
+            return;
+        }
+        var finishBtn = onboardingClick.target.closest('#onboarding-finish');
+        if (finishBtn) {
+            completeOnboarding();
+            return;
+        }
+    });
 
     const viewRoot = document.getElementById('view-root');
     if (viewRoot) {
@@ -5327,3 +5530,1310 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+function renderComingSoonView(title, message) {
+    const root = document.getElementById('view-root');
+    if (!root) return;
+    root.innerHTML = wrapDaszekViewShell([title], `
+        <section class="empty-state ds-state ds-state--coming-soon">
+            <h3>${escapeHtml(title)}</h3>
+            <p>${escapeHtml(message)}</p>
+            <p class="detail-muted">Ten widok jest w przygotowaniu i będzie dostępny w kolejnej wersji Daszka.</p>
+        </section>
+    `);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Decision Queue View — P1
+   ═══════════════════════════════════════════════════════════════════ */
+
+let decisionQueueViewRequestId = 0;
+
+async function startDecisionQueueViewLoad() {
+    const root = document.getElementById('view-root');
+    if (!root) return;
+    const requestId = ++decisionQueueViewRequestId;
+    state.data.decisionQueue = { ok: false, items: [], loadError: null, loading: true };
+    root.innerHTML = wrapDaszekViewShell(['Kolejka decyzji'], `
+        <section class="detail-section">
+            <p class="detail-muted" role="status">Wczytywanie kolejki decyzji…</p>
+            <div class="decision-skeleton">
+                <div class="detail-skeleton-line"></div>
+                <div class="detail-skeleton-line"></div>
+                <div class="detail-skeleton-line detail-skeleton-line--short"></div>
+            </div>
+        </section>
+    `);
+    try {
+        const data = await apiFetch(V3_API_BASE, '/system/decision-queue');
+        if (requestId !== decisionQueueViewRequestId || normalizeMainViewId(state.currentView) !== 'decisions') return;
+        const items = data && Array.isArray(data.items) ? data.items : [];
+        state.data.decisionQueue = { ok: !!(data && data.ok !== false), items: items, loadError: null, loading: false };
+    } catch (err) {
+        if (requestId !== decisionQueueViewRequestId || normalizeMainViewId(state.currentView) !== 'decisions') return;
+        state.data.decisionQueue = { ok: false, items: [], loadError: String(err.message || err), loading: false };
+    }
+    if (requestId !== decisionQueueViewRequestId || normalizeMainViewId(state.currentView) !== 'decisions') return;
+    renderDecisionQueueView();
+}
+
+function renderDecisionQueueView() {
+    var root = document.getElementById('view-root');
+    if (!root) return;
+    var bundle = state.data.decisionQueue || {};
+    if (bundle.loading) return;
+    if (bundle.loadError) {
+        root.innerHTML = wrapDaszekViewShell(['Kolejka decyzji'], '<section class="empty-state ds-state ds-state--error"><h3>Blad wczytywania</h3><p class="error-inline">' + escapeHtml(bundle.loadError) + '</p></section>');
+        return;
+    }
+    var items = bundle.items || [];
+    if (!items.length) {
+        root.innerHTML = wrapDaszekViewShell(['Kolejka decyzji'], '<section class="empty-state ds-state"><h3>Kolejka decyzji jest pusta</h3><p>Wszystkie decyzje zostaly podjete. Zadne dzialanie nie czeka na Ciebie.</p></section>');
+        return;
+    }
+    var cards = items.map(function (item) {
+        var priority = item.priority || 'normal';
+        var isCritical = priority === 'critical';
+        var timeHours = item.time_in_queue_hours != null ? Number(item.time_in_queue_hours) : 0;
+        var timeLabel = timeHours < 1 ? Math.round(timeHours * 60) + ' min' : timeHours.toFixed(1) + ' godz.';
+        var createdDate = item.created_at ? formatRelativeDateTime(item.created_at) : '';
+        return '<article class="decision-card' + (isCritical ? ' decision-card--critical' : '') + '" data-case-id="' + escapeHtml(item.case_id || '') + '" data-decision-id="' + escapeHtml(item.decision_id || '') + '">' +
+            '<div class="decision-card-header">' +
+            '<span class="decision-case-id">' + escapeHtml(item.case_id || '—') + '</span>' +
+            '<span class="meta-badge ' + (isCritical ? 'status-pill--conflict' : 'status-pill--review') + '">' + escapeHtml(priorityLabel(priority)) + '</span>' +
+            '</div>' +
+            '<div class="decision-card-body">' +
+            '<span class="decision-type">' + escapeHtml(humanizeCode(item.proposal_type || '')) + '</span>' +
+            '<span class="decision-status">' + escapeHtml(item.status || '—') + '</span>' +
+            '</div>' +
+            '<div class="decision-card-meta">' +
+            (createdDate ? '<span class="decision-time-badge" data-tooltip="' + escapeHtml(item.created_at || '') + '">' + escapeHtml(createdDate) + '</span>' : '') +
+            '<span>Czas w kolejce: ' + escapeHtml(timeLabel) + '</span>' +
+            '</div>' +
+            '<div class="decision-card-actions">' +
+            '<button class="btn btn-primary btn-small" data-tooltip="Otworz szczegoly sprawy" data-open-case="' + escapeHtml(item.case_id || '') + '">Otworz sprawe</button>' +
+            '<button class="btn btn-secondary btn-small" data-tooltip="Wiecej szczegolow decyzji" data-view-decision="' + escapeHtml(item.decision_id || '') + '">Szczegoly</button>' +
+            '</div>' +
+            '</article>';
+    }).join('');
+    root.innerHTML = wrapDaszekViewShell(['Kolejka decyzji'], '<section class="decision-queue-section"><div class="decision-grid">' + cards + '</div></section>');
+}
+
+/* Open a single decision in the detail panel */
+function openDecisionDetail(decisionId) {
+    var bundle = state.data.decisionQueue || {};
+    var items = Array.isArray(bundle.items) ? bundle.items : [];
+    var item = items.find(function (d) { return String(d.decision_id || '') === String(decisionId); });
+    if (!item) {
+        showToast('Nie znaleziono decyzji', 'error');
+        return;
+    }
+    var priority = item.priority || 'normal';
+    var isCritical = priority === 'critical';
+    var priorityBadge = '<span class="meta-badge ' + (isCritical ? 'status-pill--conflict' : 'status-pill--review') + '">' + escapeHtml(priorityLabel(priority)) + '</span>';
+    var timeHours = item.time_in_queue_hours != null ? Number(item.time_in_queue_hours) : 0;
+    var timeLabel = timeHours < 1 ? Math.round(timeHours * 60) + ' min' : timeHours.toFixed(1) + ' godz.';
+
+    state.detail = {
+        type: null,
+        _customHtml: '<div class="detail-shell"><div class="detail-header"><div><p class="eyebrow">Decyzja</p><h2 tabindex="-1" data-detail-focus-root>' + escapeHtml(item.decision_id || 'Decyzja') + '</h2></div><button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij">Zamknij</button></div>' +
+            '<section class="detail-section"><div class="os-event-detail-grid">' +
+            '<div><span class="detail-muted">Sprawa</span><strong>' + escapeHtml(item.case_id || '-') + '</strong></div>' +
+            '<div><span class="detail-muted">Priorytet</span>' + priorityBadge + '</div>' +
+            '<div><span class="detail-muted">Typ propozycji</span><strong>' + escapeHtml(humanizeCode(item.proposal_type || '')) + '</strong></div>' +
+            '<div><span class="detail-muted">Status</span><strong>' + escapeHtml(item.status || '-') + '</strong></div>' +
+            '<div><span class="detail-muted">Utworzono</span><strong>' + escapeHtml(formatRelativeDateTime(item.created_at || '')) + '</strong></div>' +
+            '<div><span class="detail-muted">Czas w kolejce</span><strong>' + escapeHtml(timeLabel) + '</strong></div>' +
+            '</div></section>' +
+            '<section class="detail-section detail-section-actions"><h3>Akcje</h3><div class="hitl-actions">' +
+            '<button class="btn btn-primary btn-small" data-open-case="' + escapeHtml(item.case_id || '') + '" data-tooltip="Przegladaj sprawe powiazana z ta decyzja">Otworz sprawe</button>' +
+            '</div></section>' +
+            '</div>'
+    };
+    renderDetailPanel();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Constitution View — P2
+   ═══════════════════════════════════════════════════════════════════ */
+
+let constitutionViewRequestId = 0;
+
+async function startConstitutionViewLoad() {
+    var root = document.getElementById('view-root');
+    if (!root) return;
+    var requestId = ++constitutionViewRequestId;
+    state.data.constitution = { ok: false, data: null, loadError: null, loading: true };
+    root.innerHTML = wrapDaszekViewShell(['Konstytucja'], '<section class="detail-section"><div class="detail-skeleton"><div class="detail-skeleton-line"></div><div class="detail-skeleton-line detail-skeleton-line--short"></div><div class="detail-skeleton-line"></div></div></section>');
+    try {
+        var data = await apiFetch(V3_API_BASE, '/system/constitution');
+        if (requestId !== constitutionViewRequestId || normalizeMainViewId(state.currentView) !== 'constitution') return;
+        state.data.constitution = { ok: !!(data && data.ok !== false), data: data, loadError: null, loading: false };
+    } catch (err) {
+        if (requestId !== constitutionViewRequestId || normalizeMainViewId(state.currentView) !== 'constitution') return;
+        state.data.constitution = { ok: false, data: null, loadError: String(err.message || err), loading: false };
+    }
+    if (requestId !== constitutionViewRequestId || normalizeMainViewId(state.currentView) !== 'constitution') return;
+    renderConstitutionView();
+}
+
+function renderConstitutionView() {
+    var root = document.getElementById('view-root');
+    if (!root) return;
+    var bundle = state.data.constitution || {};
+    if (bundle.loading) return;
+    if (bundle.loadError) {
+        root.innerHTML = wrapDaszekViewShell(['Konstytucja'], '<section class="empty-state ds-state ds-state--error"><h3>Blad wczytywania</h3><p class="error-inline">' + escapeHtml(bundle.loadError) + '</p></section>');
+        return;
+    }
+    var data = bundle.data;
+    if (!data || !data.sections) {
+        root.innerHTML = wrapDaszekViewShell(['Konstytucja'], '<section class="empty-state ds-state"><h3>Konstytucja niedostepna</h3><p>Brak danych konstytucji systemu.</p></section>');
+        return;
+    }
+
+    var parts = [];
+
+    // Company context card
+    if (data.company_context) {
+        parts.push('<section class="constitution-section constitution-context-card"><h3>Kontekst firmy</h3><div class="constitution-section-content">' + escapeHtml(data.company_context) + '</div></section>');
+    }
+
+    // Constitution sections
+    var sectionKeys = Object.keys(data.sections);
+    if (sectionKeys.length) {
+        parts.push('<h3 class="constitution-subheader">Sekcje konstytucji</h3>');
+        sectionKeys.forEach(function (key) {
+            var content = data.sections[key] || '';
+            parts.push('<section class="constitution-section"><h4>' + escapeHtml(key) + '</h4><div class="constitution-section-content constitution-section-content--body">' + escapeHtml(content) + '</div></section>');
+        });
+    }
+
+    // Tool allowlist
+    if (data.tool_allowlist && Array.isArray(data.tool_allowlist) && data.tool_allowlist.length) {
+        parts.push('<section class="constitution-section"><h4>Narzedzia agenta</h4><div class="tool-allowlist">' +
+            data.tool_allowlist.map(function (t) { return '<span class="tool-badge">' + escapeHtml(t) + '</span>'; }).join('') +
+            '</div></section>');
+    }
+
+    // Forbidden actions
+    if (data.forbidden_actions && Array.isArray(data.forbidden_actions) && data.forbidden_actions.length) {
+        parts.push('<section class="constitution-section"><h4>Akcje zabronione</h4><div class="tool-allowlist">' +
+            data.forbidden_actions.map(function (a) { return '<span class="tool-badge tool-badge--forbidden">' + escapeHtml(a) + '</span>'; }).join('') +
+            '</div></section>');
+    }
+
+    // RAG enriched badge
+    if (data.rag_enriched) {
+        parts.push('<section class="constitution-section"><p class="detail-muted">Konstytucja wzbogacona o dane z RAG <span class="tool-badge tool-badge--rag">RAG enriched</span></p></section>');
+    }
+
+    root.innerHTML = wrapDaszekViewShell(['Konstytucja'], parts.join('\n'));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Interactive OS Events — P2
+   ═══════════════════════════════════════════════════════════════════ */
+
+function openOsEventDetail(eventId) {
+    var bundle = state.data.systemOsEvents || {};
+    var items = Array.isArray(bundle.items) ? bundle.items : [];
+    var ev = items.find(function (e) { return String(e.event_id || '') === String(eventId); });
+    if (!ev) {
+        showToast('Nie znaleziono zdarzenia', 'error');
+        return;
+    }
+    var payloadHtml = '';
+    if (ev.payload && typeof ev.payload === 'object') {
+        payloadHtml = '<details class="detail-tech"><summary>Pelny payload JSON</summary><pre class="os-event-payload-json">' + escapeHtml(JSON.stringify(ev.payload, null, 2).slice(0, 8000)) + '</pre></details>';
+    }
+    var severity = String(ev.severity || ev.event_type || 'info').trim();
+    var severityClass = severity === 'error' ? 'status-pill--conflict' : (severity === 'warning' ? 'status-pill--review' : '');
+    var engagementId = String(ev.engagement_id || '').trim();
+    var caseLink = engagementId ? '<button class="btn btn-primary btn-small" data-open-case="' + escapeHtml(engagementId) + '" data-tooltip="Przejdz do powiazanej sprawy">Otworz powiazana sprawe</button>' : '';
+
+    state.detail = {
+        type: null,
+        _customHtml: '<div class="detail-shell"><div class="detail-header"><div><p class="eyebrow">Zdarzenie systemowe</p><h2 tabindex="-1" data-detail-focus-root>' + escapeHtml(ev.event_type || 'Zdarzenie') + '</h2></div><button type="button" class="btn btn-ghost btn-small" data-close-detail="1" aria-label="Zamknij">Zamknij</button></div><section class="detail-section"><div class="os-event-detail-grid">' +
+            '<div><span class="detail-muted">Czas</span><strong>' + escapeHtml(formatDate(ev.occurred_at || '')) + '</strong></div>' +
+            '<div><span class="detail-muted">Zrodlo</span><strong>' + escapeHtml(ev.source_repo || '—') + '</strong></div>' +
+            (ev.severity ? '<div><span class="detail-muted">Waga</span><span class="meta-badge ' + severityClass + '">' + escapeHtml(severity) + '</span></div>' : '') +
+            (ev.duration_ms != null ? '<div><span class="detail-muted">Czas trwania</span><strong>' + escapeHtml(String(ev.duration_ms)) + ' ms</strong></div>' : '') +
+            (ev.success != null ? '<div><span class="detail-muted">Sukces</span><strong>' + (ev.success ? 'Tak' : 'Nie') + '</strong></div>' : '') +
+            '</div></section>' +
+            (ev.summary_pl ? '<section class="detail-section"><h3>Opis</h3><p>' + escapeHtml(ev.summary_pl) + '</p></section>' : '') +
+            (ev.trace_id ? '<section class="detail-section"><h3>Trace ID</h3><p class="detail-muted">' + escapeHtml(ev.trace_id) + '</p></section>' : '') +
+            (engagementId ? '<section class="detail-section"><h3>Powiązanie</h3><p class="detail-muted">engagement: ' + escapeHtml(engagementId) + '</p>' + caseLink + '</section>' : '') +
+            payloadHtml +
+            '</div>'
+    };
+    renderDetailPanel();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Onboarding Wizard — P3
+   ═══════════════════════════════════════════════════════════════════ */
+
+var ONBOARDING_STEPS = [
+    { title: 'Witaj w Daszku', icon: '&#127758;', text: 'Daszek to Twoje cyfrowe biurko operatorskie. AI przynosi Ci najwazniejsze sprawy, abys nie musial przegladac setek maili.' },
+    { title: 'Twoje widoki', icon: '&#128202;', text: 'Biurko pokazuje co wymaga uwagi. Sprawy to pelny rejestr. Czat pozwala rozmawiac z agentem AI. Dzień i Archiwum daja szerszy obraz.' },
+    { title: 'Czat z agentem', icon: '&#129302;', text: 'Mozesz wydawac polecenia agentowi: sprawdz stan, zapytaj o klienta, popros o podsumowanie. Agent mowi po polsku i rozumie Twoja firme.' },
+    { title: 'Daszek gotowy!', icon: '&#10004;&#65039;', text: 'Biurko czeka. Zaczynaj prace — wszystko, co wazne, juz na Ciebie czeka.' },
+];
+
+function showOnboardingWizard() {
+    var backdrop = document.createElement('div');
+    backdrop.className = 'onboarding-backdrop';
+    backdrop.id = 'onboarding-backdrop';
+    document.body.appendChild(backdrop);
+
+    var overlay = document.createElement('div');
+    overlay.className = 'onboarding-overlay';
+    overlay.id = 'onboarding-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'onboarding-title');
+    overlay.innerHTML = renderOnboardingStep(0);
+    document.body.appendChild(overlay);
+    var firstFocus = overlay.querySelector('button');
+    if (firstFocus) {
+        firstFocus.focus();
+    }
+
+    void overlay.offsetWidth; // force reflow for animation
+    backdrop.classList.add('onboarding-backdrop--visible');
+    overlay.classList.add('onboarding-overlay--visible');
+}
+
+function renderOnboardingStep(stepIdx) {
+    var step = ONBOARDING_STEPS[stepIdx];
+    if (!step) return '';
+    var dots = ONBOARDING_STEPS.map(function (_, i) {
+        return '<span class="onboarding-step-dot' + (i === stepIdx ? ' onboarding-step-dot--active' : '') + (i < stepIdx ? ' onboarding-step-dot--done' : '') + '"></span>';
+    }).join('');
+    var isLast = stepIdx === ONBOARDING_STEPS.length - 1;
+    var buttons = isLast
+        ? '<button class="btn btn-primary" id="onboarding-finish" data-tooltip="Rozpocznij prace z Daszkiem">Rozpocznij prace</button>'
+        : '<button class="btn btn-primary" id="onboarding-next" data-tooltip="Kontynuuj">Dalej</button><button class="btn btn-ghost btn-small" id="onboarding-skip" data-tooltip="Pomin wprowadzenie">Pomin</button>';
+    return '<div class="onboarding-card">' +
+        '<div class="onboarding-icon">' + step.icon + '</div>' +
+        '<h2 id="onboarding-title">' + escapeHtml(step.title) + '</h2>' +
+        '<p>' + escapeHtml(step.text) + '</p>' +
+        '<div class="onboarding-dots">' + dots + '</div>' +
+        '<div class="onboarding-actions">' + buttons + '</div>' +
+        '</div>';
+}
+
+function advanceOnboarding(currentStep) {
+    var nextStep = currentStep + 1;
+    if (nextStep >= ONBOARDING_STEPS.length) {
+        completeOnboarding();
+        return;
+    }
+    var overlay = document.getElementById('onboarding-overlay');
+    if (!overlay) return;
+    overlay.innerHTML = renderOnboardingStep(nextStep);
+    var focusBtn = overlay.querySelector('button');
+    if (focusBtn) {
+        focusBtn.focus();
+    }
+}
+
+function completeOnboarding() {
+    try { localStorage.setItem('daszek-onboarding-done', '1'); } catch (_) { /* ignore */ }
+    var overlay = document.getElementById('onboarding-overlay');
+    var backdrop = document.getElementById('onboarding-backdrop');
+    if (overlay) {
+        overlay.classList.remove('onboarding-overlay--visible');
+        setTimeout(function () { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 300);
+    }
+    if (backdrop) {
+        backdrop.classList.remove('onboarding-backdrop--visible');
+        setTimeout(function () { if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop); }, 300);
+    }
+    showToast('Daszek gotowy do pracy', 'success');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Agent Chat View — production chat interface
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Extensibility: Message Action Registry ────────────────────────
+ * Register a new action in chatMessageActions to extend per-message UI.
+ * Each entry: { render: function(msg, state), position: 'after'|'before'|'footer' }
+ */
+/** @type {Object<string, {render: function(Object): string, position: string}>} */
+const chatMessageActions = {
+    copy: { render: renderChatCopyButton, position: 'after' },
+    feedback: { render: renderChatFeedbackButtons, position: 'after' },
+};
+
+/* ── Session ID ─────────────────────────────────────────────────── */
+function getOrCreateChatSessionId() {
+    let sid = localStorage.getItem('daszek-chat-session-id');
+    if (!sid) {
+        sid = crypto.randomUUID ? crypto.randomUUID() : 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('daszek-chat-session-id', sid);
+    }
+    return sid;
+}
+
+/**
+ * Converts markdown text to safe HTML.
+ * Supports: h1-h4, bold, italic, strikethrough, inline code, fenced code blocks,
+ * blockquotes, links, unordered/ordered/task lists, tables, hr, emoji shortcodes.
+ * Pure function — no DOM access, fully testable.
+ * @param {string} text
+ * @returns {string}
+ */
+function renderMarkdown(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    let html = div.innerHTML;
+
+    // Preserve fenced code blocks
+    var codeBlocks = [];
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function (_, lang, code) {
+        var key = '%%CODEBLOCK_' + codeBlocks.length + '%%';
+        codeBlocks.push({ lang: lang, code: code });
+        return key;
+    });
+
+    // Headers h1-h4
+    html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+    // Horizontal rules
+    html = html.replace(/^(---|\*\*\*|___)\s*$/gm, '<hr>');
+
+    // Blockquotes
+    html = html.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+
+    // Tables
+    html = html.replace(/\n\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/g, function (_, header, body) {
+        var headers = header.split('|').map(function (c) { return c.trim(); }).filter(Boolean);
+        var rows = body.trim().split('\n').map(function (row) {
+            var cells = row.split('|').map(function (c) { return c.trim(); }).filter(Boolean);
+            return '<tr>' + cells.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>';
+        }).join('');
+        return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    });
+
+    // Task lists: - [x] done, - [ ] todo
+    html = html.replace(/^[\s]*[-*]\s+\[([ xX])\]\s+(.+)$/gm, function (_, checked, label) {
+        var c = (checked === 'x' || checked === 'X') ? ' checked' : '';
+        return '<li class="task-list-item"><input type="checkbox" disabled' + c + '> ' + label + '</li>';
+    });
+
+    // Unordered lists
+    html = html.replace(/^[\s]*[-*]\s+(.+)$/gm, '<li>$1</li>');
+    html = html.replace(/((?:<li[^>]*>.*<\/li>\n?)+)/g, function (m) { return '<ul>' + m + '</ul>'; });
+
+    // Ordered lists
+    html = html.replace(/^[\s]*\d+\.\s+(.+)$/gm, '<li>$1</li>');
+    html = html.replace(/((?:<li[^>]*>.*<\/li>\n?)+)/g, function (m) { return '<ol>' + m + '</ol>'; });
+
+    // Merge adjacent blockquotes
+    html = html.replace(/<\/blockquote>\n?<blockquote>/g, '\n');
+
+    // Strikethrough
+    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+    // Bold + italic
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Links (allowlisted schemes only)
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, label, href) {
+        const safeHref = sanitizeMarkdownHref(href);
+        if (!safeHref) {
+            return escapeHtml(label);
+        }
+        return '<a href="' + escapeHtml(safeHref) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label) + '</a>';
+    });
+
+    // Emoji shortcodes
+    html = html.replace(/:(\w+):/g, function (_, name) {
+        var m = {
+            smile: '\u{1F60A}', fire: '\u{1F525}', ok: '\u{1F44C}', check: '\u2705', x: '\u274C',
+            warning: '\u26A0\uFE0F', info: '\u2139\uFE0F', question: '\u2753', bulb: '\uD83D\uDCA1',
+            star: '\u2B50', heart: '\u2764\uFE0F', thumbsup: '\uD83D\uDC4D', thumbsdown: '\uD83D\uDC4E',
+            clock: '\uD83D\uDD50', alert: '\uD83D\uDEA8', robot: '\uD83E\uDD16', wave: '\uD83D\uDC4B',
+            folder: '\uD83D\uDCC1', file: '\uD83D\uDCC4', search: '\uD83D\uDD0D', mail: '\u2709\uFE0F',
+            phone: '\uD83D\uDCDE', calendar: '\uD83D\uDCC5', chart: '\uD83D\uDCCA', gear: '\u2699\uFE0F',
+            lock: '\uD83D\uDD12', unlock: '\uD83D\uDD13', key: '\uD83D\uDD11', link: '\uD83D\uDD17',
+            zap: '\u26A1', bug: '\uD83D\uDC1B', rocket: '\uD83D\uDE80', party: '\uD83C\uDF89'
+        };
+        return m[name] || ':' + name + ':';
+    });
+
+    // Paragraphs and line breaks
+    html = html.replace(/\n\n+/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
+
+    if (!/^<(h[1-4]|ul|ol|pre|blockquote|table|hr|p|li)/.test(html)) {
+        html = '<p>' + html + '</p>';
+    }
+
+    // Restore code blocks with proper HTML escaping
+    for (var ci = 0; ci < codeBlocks.length; ci++) {
+        var cb = codeBlocks[ci];
+        var langClass = cb.lang ? ' class="language-' + escapeHtml(cb.lang) + '"' : '';
+        var esc = document.createElement('div');
+        esc.textContent = cb.code;
+        html = html.replace('%%CODEBLOCK_' + ci + '%%', '<pre' + langClass + '><code>' + esc.innerHTML + '</code></pre>');
+    }
+
+    return html;
+}
+
+/* ── Format timestamp ────────────────────────────────────────────── */
+function chatFormatTime(iso) {
+    if (!iso) return '';
+    try {
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+        return '';
+    }
+}
+
+/* ── UUID for turn IDs ───────────────────────────────────────────── */
+function chatTurnId() {
+    return 'turn_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+/* ── Structured logging ───────────────────────────────────────────── */
+/**
+ * Log a chat telemetry event. In production these would feed a metrics pipeline.
+ * @param {string} event
+ * @param {Object} [data]
+ */
+function chatLog(event, data) {
+    if (typeof console.info === 'function') {
+        console.info('[CHAT]', event, data || '');
+    }
+}
+
+/* ── Start chat view load ───────────────────────────────────────── */
+var chatViewRequestId = 0;
+
+function startChatViewLoad() {
+    var root = document.getElementById('view-root');
+    if (!root) return;
+
+    var requestId = ++chatViewRequestId;
+
+    // Get or create session
+    state.agentChat.sessionId = getOrCreateChatSessionId();
+    state.agentChat.loadError = null;
+    state.agentChat.loading = true;
+
+    // Store scroll position restoration
+    var prevScrollTop = root.scrollTop || 0;
+
+    // Render chat shell
+    renderChatShell();
+
+    // Restore messages from state (if returning to chat view)
+    renderChatMessages();
+
+    // Auto-brief if no messages yet
+    if (!state.agentChat.hasBriefed && state.agentChat.messages.length === 0) {
+        state.agentChat.loading = false;
+        sendChatBrief();
+    } else {
+        state.agentChat.loading = false;
+        scrollChatToBottom();
+    }
+}
+
+/* ── Render Chat Shell ──────────────────────────────────────────── */
+function renderChatShell() {
+    var root = document.getElementById('view-root');
+    if (!root) return;
+
+    var messages = state.agentChat.messages.map(function (m) { return renderChatMessageHtml(m); }).join('');
+    var emptyClass = state.agentChat.messages.length === 0 ? '' : ' ds-hidden';
+    var suggestionsHtml = state.agentChat.messages.length === 0 ? renderChatSuggestions() : '';
+
+    root.innerHTML = wrapDaszekViewShell(['Czat'], `
+        <div id="chat-shell" class="chat-shell">
+            <div class="chat-case-selector">
+                <label for="chat-case-select">Kontekst:</label>
+                <select id="chat-case-select">
+                    <option value="">Ogolny (bez sprawy)</option>
+                </select>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                ${messages}
+                <div class="chat-scroll-anchor" id="chat-scroll-anchor"></div>
+            </div>
+            <div class="chat-suggestions${emptyClass}" id="chat-suggestions">${suggestionsHtml}</div>
+            <div class="chat-input-row">
+                <textarea class="chat-input-field" id="chat-input" placeholder="Napisz wiadomosc do agenta..." rows="1"></textarea>
+                <button class="chat-send-btn" id="chat-send-btn" data-tooltip="Wyslij (Enter)">&#10148;</button>
+            </div>
+        </div>
+    `);
+
+    // Bind events
+    bindChatEvents();
+
+    // Scroll to bottom after render
+    setTimeout(scrollChatToBottom, 50);
+}
+
+/* ── Render suggestions chips (teaching empty state) ────────────── */
+function renderChatSuggestions() {
+    var chips = [
+        { text: 'Przeglad na dzis', prompt: 'Co dzisiaj w firmie?' },
+        { text: 'Pokaz wszystkie aktywne sprawy', prompt: 'Pokaz wszystkie aktywne sprawy' },
+        { text: 'Jakie decyzje czekaja na mnie?', prompt: 'Jakie decyzje czekaja na mnie?' },
+        { text: 'Stan techniczny systemu', prompt: 'Pokaz stan systemu' },
+    ];
+    return chips.map(function (c) {
+        return '<span class="chat-suggestion-chip" data-action="suggest" data-prompt="' + escapeHtml(c.prompt) + '">' + escapeHtml(c.text) + '</span>';
+    }).join('');
+}
+
+/* ── Render a single message HTML ───────────────────────────────── */
+function renderChatMessageHtml(msg) {
+    if (!msg) return '';
+    var roleClass = msg.role === 'user' ? 'chat-message--user' : (msg.role === 'error' ? 'chat-message--error' : 'chat-message--agent');
+    var roleLabel = msg.role === 'user' ? 'Ty' : 'Agent';
+    var roleSpanClass = msg.role === 'user' ? 'chat-message-role--user' : '';
+    var time = chatFormatTime(msg.timestamp);
+    var contentHtml = renderMarkdown(msg.content || '');
+    var isStreaming = msg._streaming || false;
+    var thinkingHtml = renderChatThinking(msg);
+    var proposalsHtml = renderChatProposals(msg);
+    var actionsHtml = renderChatMessageActions(msg);
+
+    var typingIndicator = isStreaming ? '<div class="chat-typing"><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span></div>' : '';
+
+    var stoppedNote = msg._stopped ? '<div class="chat-stopped-note">Generowanie zatrzymane przez operatora.</div>' : '';
+
+    return '<div class="chat-message ' + roleClass + '" data-turn-id="' + escapeHtml(msg.turnId || '') + '">' +
+        '<div class="chat-message-header">' +
+        '<span class="chat-message-role ' + roleSpanClass + '">' + escapeHtml(roleLabel) + '</span>' +
+        '<span class="chat-message-time">' + escapeHtml(time) + '</span>' +
+        '</div>' +
+        thinkingHtml +
+        '<div class="chat-markdown">' + contentHtml + '</div>' +
+        typingIndicator +
+        stoppedNote +
+        proposalsHtml +
+        actionsHtml +
+        '</div>';
+}
+
+/* ── Thinking indicator ──────────────────────────────────────────── */
+function renderChatThinking(msg) {
+    if (!msg._thinking) return '';
+    var expandedAttr = msg._thinkingExpanded ? '' : ' style="display:none"';
+    return '<div class="chat-message-thinking" role="button" tabindex="0" aria-expanded="' + (msg._thinkingExpanded ? 'true' : 'false') + '">' +
+        '<div class="chat-thinking-summary">' +
+        '<span>&#9881; Agent analizuje...</span>' +
+        '<span style="margin-left:auto;font-size:var(--font-sm)">pokaż szczegoly</span></div>' +
+        '<div class="chat-thinking-detail"' + expandedAttr + '>' +
+        '<p class="detail-muted">' + escapeHtml(msg._thinkingDetail || 'Przetwarzanie zapytania...') + '</p></div></div>';
+}
+/* ── Proposals display ───────────────────────────────────────────── */
+function renderChatProposals(msg) {
+    if (!msg.proposals || msg.proposals.length === 0) return '';
+    var items = msg.proposals.map(function (p) {
+        return '<div class="chat-proposal-item">' +
+            '<span class="chat-proposal-type">' + escapeHtml(p.proposal_type || 'akcja') + '</span>' +
+            '<span class="chat-proposal-status">' + escapeHtml(p.status || 'proponowane') + '</span>' +
+            '<span class="chat-proposal-actions">' +
+            '<button class="chat-proposal-btn chat-proposal-btn--approve" data-action="proposal-approve" data-proposal-id="' + escapeHtml(p.proposal_id || '') + '">Zatwierdz</button>' +
+            '<button class="chat-proposal-btn chat-proposal-btn--reject" data-action="proposal-reject" data-proposal-id="' + escapeHtml(p.proposal_id || '') + '">Odrzuc</button>' +
+            '</span></div>';
+    }).join('');
+    return '<div class="chat-proposal-bar"><h4>Agent proponuje:</h4>' + items + '</div>';
+}
+
+/* ── Message actions (from registry) ─────────────────────────────── */
+function renderChatMessageActions(msg) {
+    var actionKeys = Object.keys(chatMessageActions);
+    if (actionKeys.length === 0 || msg.role !== 'agent' || msg._streaming) return '';
+
+    var buttons = actionKeys.map(function (key) {
+        var action = chatMessageActions[key];
+        if (action.position === 'footer') return '';
+        return action.render(msg);
+    }).filter(Boolean).join('');
+
+    if (!buttons) return '';
+    return '<div class="chat-message-actions">' + buttons + '</div>';
+}
+
+/* ── Feedback buttons ────────────────────────────────────────────── */
+function renderChatFeedbackButtons(msg) {
+    var turnId = msg.turnId || '';
+    var upActive = msg._feedback === 'thumbs_up' ? ' chat-action-btn--active-thumbs-up' : '';
+    var downActive = msg._feedback === 'thumbs_down' ? ' chat-action-btn--active-thumbs-down' : '';
+    return '<button class="chat-action-btn' + upActive + '" data-action="thumbs-up" data-turn-id="' + escapeHtml(turnId) + '" data-tooltip="Przydatne">&#128077;</button>' +
+        '<button class="chat-action-btn' + downActive + '" data-action="thumbs-down" data-turn-id="' + escapeHtml(turnId) + '" data-tooltip="Nieprzydatne">&#128078;</button>';
+}
+
+/* ── Copy button (premium UX) ─────────────────────────────────────── */
+function renderChatCopyButton(msg) {
+    return '<button class="chat-action-btn" data-action="copy-message" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-tooltip="Kopiuj tresc">' +
+        '<span class="chat-action-icon">&#128203;</span> Kopiuj</button>';
+}
+
+function chatCopyMessage(turnId) {
+    var msg = findChatMessage(turnId);
+    if (!msg || !msg.content) return;
+    var text = msg.content;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+            chatLog('copy_success', { turnId: turnId, length: text.length });
+        }).catch(function () { fallbackCopy(text); });
+    } else {
+        fallbackCopy(text);
+    }
+}
+
+function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (_) { /* noop */ }
+    document.body.removeChild(ta);
+}
+
+/* ── Chat event bindings ─────────────────────────────────────────── */
+function bindChatEvents() {
+    var shell = document.getElementById('chat-shell');
+    if (!shell) return;
+
+    var input = document.getElementById('chat-input');
+    if (input) {
+        input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend(); }
+            if (e.key === 'Escape' && state.agentChat.isStreaming) { stopChatGeneration(); }
+        });
+        input.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+    }
+
+    // Event delegation for all interactive elements
+    shell.addEventListener('click', function (e) {
+        var t = e.target;
+
+        if (t.id === 'chat-send-btn') {
+            e.preventDefault();
+            if (state.agentChat.isStreaming) stopChatGeneration(); else handleChatSend();
+            return;
+        }
+
+        var chip = t.closest('[data-action="suggest"]');
+        if (chip) { e.preventDefault(); sendChatMessage(chip.getAttribute('data-prompt')); return; }
+
+        var thinkingEl = t.closest('.chat-message-thinking');
+        if (thinkingEl) {
+            e.preventDefault();
+            var detail = thinkingEl.querySelector('.chat-thinking-detail');
+            if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+            return;
+        }
+
+        var uBtn = t.closest('[data-action="thumbs-up"]');
+        if (uBtn) { e.preventDefault(); chatFeedback(uBtn.getAttribute('data-turn-id'), 'thumbs_up'); return; }
+
+        var dBtn = t.closest('[data-action="thumbs-down"]');
+        if (dBtn) { e.preventDefault(); chatFeedback(dBtn.getAttribute('data-turn-id'), 'thumbs_down'); return; }
+
+        var fbSend = t.closest('[data-action="feedback-send"]');
+        if (fbSend) { e.preventDefault(); var w = fbSend.closest('.chat-feedback-reason-wrapper'); if (w) sendFeedbackReasonFromWrapper(w); return; }
+
+        var appBtn = t.closest('[data-action="proposal-approve"]');
+        if (appBtn) { e.preventDefault(); chatApproveProposal(appBtn, appBtn.getAttribute('data-proposal-id') || ''); return; }
+
+        var rejBtn = t.closest('[data-action="proposal-reject"]');
+        if (rejBtn) { e.preventDefault(); chatRejectProposal(rejBtn, rejBtn.getAttribute('data-proposal-id') || ''); return; }
+
+        var copyBtn = t.closest('[data-action="copy-message"]');
+        if (copyBtn) { e.preventDefault(); chatCopyMessage(copyBtn.getAttribute('data-turn-id') || ''); return; }
+
+        var scrollHint = t.closest('[data-action="scroll-down"]');
+        if (scrollHint) { e.preventDefault(); scrollChatToBottomSmooth(); return; }
+    });
+
+    // Smart scroll: detect scroll-up, show hint
+    var msgC = document.getElementById('chat-messages');
+    if (msgC) {
+        msgC.addEventListener('scroll', function () {
+            var threshold = 100;
+            var atBottom = (msgC.scrollHeight - msgC.scrollTop - msgC.clientHeight) < threshold;
+            var hint = document.getElementById('chat-scroll-hint');
+            if (!atBottom) {
+                if (!hint) {
+                    var h = document.createElement('div');
+                    h.id = 'chat-scroll-hint';
+                    h.className = 'chat-scroll-hint';
+                    h.setAttribute('data-action', 'scroll-down');
+                    h.textContent = 'Nowe wiadomosci ponizej. Kliknij, by przewinac.';
+                    msgC.parentNode.appendChild(h);
+                    setTimeout(function () { h.classList.add('chat-scroll-hint--visible'); }, 50);
+                }
+            } else if (hint) {
+                hint.classList.remove('chat-scroll-hint--visible');
+                setTimeout(function () { if (hint && hint.parentNode) hint.parentNode.removeChild(hint); }, 300);
+            }
+        });
+    }
+}
+
+/* ── Handle send: route to brief or message ──────────────────────── */
+function handleChatSend() {
+    var input = document.getElementById('chat-input');
+    if (!input) return;
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.style.height = 'auto';
+    sendChatMessage(text);
+}
+
+/* ── Send a chat message (sync, with streaming) ──────────────────── */
+function sendChatMessage(userInput) {
+    if (!userInput || state.agentChat.isStreaming) return;
+
+    state.agentChat.isStreaming = true;
+    state.agentChat.hasBriefed = true;
+
+    var sessionId = state.agentChat.sessionId;
+    var caseId = state.agentChat.currentCaseId || '';
+    var controller = new AbortController();
+    state.agentChat.abortController = controller;
+
+    var turnId = chatTurnId();
+    var userMsg = { role: 'user', content: userInput, timestamp: new Date().toISOString(), turnId: turnId, proposals: [], _streaming: false };
+    state.agentChat.messages.push(userMsg);
+    appendChatMessageToDom(userMsg);
+
+    var agentTurnId = chatTurnId();
+    var agentMsg = { role: 'agent', content: '', timestamp: new Date().toISOString(), turnId: agentTurnId, proposals: [], _streaming: true, _thinking: true, _thinkingDetail: 'Laczenie z agentem...' };
+    state.agentChat.messages.push(agentMsg);
+    appendChatMessageToDom(agentMsg);
+
+    updateChatSendBtn(true);
+    scrollChatToBottom();
+
+    var payload = { user_input: userInput, session_id: sessionId };
+    if (caseId) payload.case_id = caseId;
+
+    var url = buildApiUrl(V3_API_BASE, '/agent-chat/stream', 'POST');
+    chatLog('send', { inputLength: userInput.length, sessionId: sessionId });
+
+    // Fetch timeout: 30s
+    var fetchTimeout = setTimeout(function () {
+        controller.abort();
+        markChatStopped(agentTurnId);
+        setChatError('Przekroczono czas oczekiwania na odpowiedz agenta (30s).');
+        chatLog('timeout', { turnId: agentTurnId });
+    }, 30000);
+
+    fetch(url, {
+        method: 'POST',
+        headers: buildApiHeaders('POST'),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+        credentials: 'same-origin',
+    })
+        .then(function (response) {
+            if (!response.ok) { clearTimeout(fetchTimeout); throw new Error('Agent niedostepny (HTTP ' + response.status + ')'); }
+            var reader = response.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            function readStream() {
+                reader.read().then(function (result) {
+                    if (result.done) {
+                        clearTimeout(fetchTimeout);
+                        finalizeChatMessage(agentTurnId);
+                        chatLog('stream_complete', { turnId: agentTurnId });
+                        return;
+                    }
+                    clearTimeout(fetchTimeout);
+                    buffer += decoder.decode(result.value, { stream: true });
+                    var lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i];
+                        if (line.startsWith('event: ')) {
+                            var eventType = line.slice(7).trim();
+                            if (i + 1 < lines.length && lines[i + 1].startsWith('data: ')) {
+                                try { handleSseEvent(eventType, JSON.parse(lines[i + 1].slice(6).trim()), agentTurnId); } catch (_) { }
+                                i++;
+                            }
+                        } else if (line.startsWith('data: ')) {
+                            try { handleSseEvent('data', JSON.parse(line.slice(6).trim()), agentTurnId); } catch (_) { appendChatContent(agentTurnId, line); }
+                        }
+                    }
+                    readStream();
+                }).catch(function (err) {
+                    clearTimeout(fetchTimeout);
+                    if (err.name === 'AbortError') markChatStopped(agentTurnId); else setChatError(err.message || 'Blad strumienia');
+                });
+            }
+            readStream();
+        })
+        .catch(function (err) {
+            clearTimeout(fetchTimeout);
+            if (err.name === 'AbortError') markChatStopped(agentTurnId); else setChatError(err.message || 'Blad polaczenia z agentem');
+        });
+}
+
+/* ── Handle SSE events ───────────────────────────────────────────── */
+function handleSseEvent(eventType, data, agentTurnId) {
+    switch (eventType) {
+        case 'status':
+            if (data.phase && data.status === 'thinking') {
+                updateChatThinking(agentTurnId, data.phase);
+            }
+            break;
+        case 'turn':
+            if (data.content) {
+                appendChatContent(agentTurnId, data.content);
+            } else if (data.role === 'assistant' && data.content) {
+                appendChatContent(agentTurnId, data.content);
+            }
+            break;
+        case 'done':
+            if (data.proposals) {
+                updateChatProposals(agentTurnId, data.proposals);
+            }
+            if (data.session_id) {
+                state.agentChat.sessionId = data.session_id;
+                localStorage.setItem('daszek-chat-session-id', data.session_id);
+            }
+            finalizeChatMessage(agentTurnId);
+            break;
+        case 'error':
+            setChatError(data.error || 'Blad serwera agenta');
+            break;
+        default:
+            // Unknown event type — try content
+            if (data.content) {
+                appendChatContent(agentTurnId, data.content);
+            } else if (typeof data === 'string') {
+                appendChatContent(agentTurnId, data);
+            }
+            break;
+    }
+}
+
+/* ── Append content to streaming message ─────────────────────────── */
+function appendChatContent(turnId, content) {
+    var msg = findChatMessage(turnId);
+    if (!msg) return;
+
+    // Check for proposal data
+    try {
+        var parsed = typeof content === 'string' ? JSON.parse(content) : content;
+        if (parsed.proposals) {
+            msg.proposals = parsed.proposals;
+        }
+        if (parsed.content) {
+            content = parsed.content;
+        }
+        if (parsed.agent_turns && parsed.agent_turns !== undefined) {
+            msg._agentTurns = parsed.agent_turns;
+        }
+        if (parsed.hitl_required !== undefined) {
+            state.agentChat.hitlRequired = parsed.hitl_required;
+        }
+    } catch (e) {
+        // Not JSON, treat as raw content
+    }
+
+    var textContent = typeof content === 'string' ? content : '';
+    msg.content += textContent;
+    msg._thinking = false;
+
+    updateChatMessageDom(turnId, msg);
+    scrollChatToBottom();
+}
+
+/* ── Update thinking status ──────────────────────────────────────── */
+function updateChatThinking(turnId, phase) {
+    var msg = findChatMessage(turnId);
+    if (!msg) return;
+    var phaseLabels = {
+        loading_context: 'Wczytywanie kontekstu...',
+        gathering_context: 'Zbieranie informacji...',
+        thinking: 'Agent analizuje...',
+    };
+    msg._thinkingDetail = phaseLabels[phase] || 'Przetwarzanie: ' + phase;
+    updateChatMessageDom(turnId, msg);
+}
+
+/* ── Update proposals for a message ──────────────────────────────── */
+function updateChatProposals(turnId, proposals) {
+    var msg = findChatMessage(turnId);
+    if (!msg || !proposals) return;
+    msg.proposals = proposals;
+    updateChatMessageDom(turnId, msg);
+}
+
+/* ── Finalize message (streaming complete) ───────────────────────── */
+function finalizeChatMessage(turnId) {
+    var msg = findChatMessage(turnId);
+    if (!msg) return;
+    msg._streaming = false;
+    msg._thinking = false;
+    updateChatMessageDom(turnId, msg);
+    state.agentChat.isStreaming = false;
+    state.agentChat.abortController = null;
+    updateChatSendBtn(false);
+    scrollChatToBottom();
+}
+
+/* ── Mark message as stopped ─────────────────────────────────────── */
+function markChatStopped(turnId) {
+    var msg = findChatMessage(turnId);
+    if (!msg) return;
+    msg._streaming = false;
+    msg._thinking = false;
+    msg._stopped = true;
+    updateChatMessageDom(turnId, msg);
+    state.agentChat.isStreaming = false;
+    state.agentChat.abortController = null;
+    updateChatSendBtn(false);
+}
+
+/* ── Set chat error ──────────────────────────────────────────────── */
+function setChatError(errorText) {
+    state.agentChat.isStreaming = false;
+    state.agentChat.abortController = null;
+    updateChatSendBtn(false);
+    state.agentChat.messages.push({
+        role: 'error', content: errorText || 'Nieznany blad',
+        timestamp: new Date().toISOString(), turnId: chatTurnId(),
+        proposals: [], _streaming: false,
+    });
+    appendChatMessageToDom(state.agentChat.messages[state.agentChat.messages.length - 1]);
+    scrollChatToBottom();
+    chatLog('error', { error: errorText });
+}
+
+/* ── Stop generation ─────────────────────────────────────────────── */
+function stopChatGeneration() {
+    if (!state.agentChat.abortController) return;
+    state.agentChat.abortController.abort();
+    chatLog('user_stopped_generation', {});
+}
+
+/* ── Update send button icon ─────────────────────────────────────── */
+function updateChatSendBtn(isStreaming) {
+    var btn = document.getElementById('chat-send-btn');
+    if (!btn) return;
+    if (isStreaming) {
+        btn.innerHTML = '&#9632;';
+        btn.className = 'chat-send-btn chat-send-btn--stop';
+        btn.title = 'Zatrzymaj (Esc)';
+    } else {
+        btn.innerHTML = '&#10148;';
+        btn.className = 'chat-send-btn';
+        btn.title = 'Wyslij (Enter)';
+    }
+}
+
+/* ── Find message in state by turnId ─────────────────────────────── */
+function findChatMessage(turnId) {
+    for (var i = 0; i < state.agentChat.messages.length; i++) {
+        if (state.agentChat.messages[i].turnId === turnId) {
+            return state.agentChat.messages[i];
+        }
+    }
+    return null;
+}
+
+/* ── Append message to DOM ───────────────────────────────────────── */
+function appendChatMessageToDom(msg) {
+    var container = document.getElementById('chat-messages');
+    if (!container) return;
+    var html = renderChatMessageHtml(msg);
+    var wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    var el = wrapper.firstElementChild;
+    if (el) {
+        el.dataset.turnId = msg.turnId || '';
+        container.insertBefore(el, document.getElementById('chat-scroll-anchor'));
+    }
+}
+
+/* ── Update message DOM in place ─────────────────────────────────── */
+function updateChatMessageDom(turnId, msg) {
+    var container = document.getElementById('chat-messages');
+    if (!container) return;
+    var existing = container.querySelector('[data-turn-id="' + turnId + '"]');
+    if (!existing) return;
+    var html = renderChatMessageHtml(msg);
+    var wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    var newEl = wrapper.firstElementChild;
+    if (newEl) {
+        existing.replaceWith(newEl);
+    }
+}
+
+/* ── Render all messages from state ──────────────────────────────── */
+function renderChatMessages() {
+    var container = document.getElementById('chat-messages');
+    if (!container) return;
+    var msgs = state.agentChat.messages;
+    var html = msgs.map(function (m) { return renderChatMessageHtml(m); }).join('');
+    container.innerHTML = html + '<div class="chat-scroll-anchor" id="chat-scroll-anchor"></div>';
+}
+
+/* ── Auto-brief (first load) ─────────────────────────────────────── */
+function sendChatBrief() {
+    var sessionId = state.agentChat.sessionId;
+    state.agentChat.isStreaming = true;
+    state.agentChat.hasBriefed = true;
+
+    var turnId = chatTurnId();
+    var agentMsg = {
+        role: 'agent', content: '',
+        timestamp: new Date().toISOString(), turnId: turnId,
+        proposals: [], _streaming: true, _thinking: true,
+        _thinkingDetail: 'Przygotowywanie briefingu...',
+    };
+    state.agentChat.messages.push(agentMsg);
+    appendChatMessageToDom(agentMsg);
+    updateChatSendBtn(true);
+
+    var url = buildApiUrl(V3_API_BASE, '/agent-chat', 'POST');
+
+    fetch(url, {
+        method: 'POST',
+        headers: buildApiHeaders('POST'),
+        body: JSON.stringify({ brief: true, session_id: sessionId }),
+        credentials: 'same-origin',
+    })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+            if (data.user_input) {
+                agentMsg.content = data.user_input;
+                state.agentChat.messages.splice(state.agentChat.messages.length - 1, 0, {
+                    role: 'user', content: 'Przeglad na dzis',
+                    timestamp: data.session_id ? new Date().toISOString() : '',
+                    turnId: chatTurnId(), proposals: [], _streaming: false,
+                });
+            }
+            if (data.proposals) agentMsg.proposals = data.proposals;
+            agentMsg._streaming = false;
+            agentMsg._thinking = false;
+            updateChatMessageDom(turnId, agentMsg);
+            state.agentChat.isStreaming = false;
+            updateChatSendBtn(false);
+            scrollChatToBottom();
+            renderChatMessages();
+            var suggestions = document.getElementById('chat-suggestions');
+            if (suggestions) suggestions.classList.add('ds-hidden');
+            chatLog('brief_done', { sessionId: sessionId, inputLength: (data.user_input || '').length });
+        })
+        .catch(function () {
+            agentMsg._streaming = false;
+            agentMsg._thinking = false;
+            agentMsg.content = 'Dzien dobry! Jestem Twoim asystentem. Mozesz mnie pytac o sprawy, zadania, system albo wydawac polecenia.';
+            updateChatMessageDom(turnId, agentMsg);
+            state.agentChat.isStreaming = false;
+            updateChatSendBtn(false);
+        });
+}
+
+/* ── Feedback handler (uses delegation, no onclick) ──────────────── */
+/**
+ * @param {string} turnId
+ * @param {string} rating - 'thumbs_up'|'thumbs_down'
+ */
+function chatFeedback(turnId, rating) {
+    var sessionId = state.agentChat.sessionId;
+    var url = buildApiUrl(V3_API_BASE, '/agent-chat/feedback', 'POST');
+
+    fetch(url, {
+        method: 'POST',
+        headers: buildApiHeaders('POST'),
+        body: JSON.stringify({ session_id: sessionId, turn_id: turnId, rating: rating, comment: '' }),
+        credentials: 'same-origin',
+    }).catch(function () { /* best-effort */ });
+
+    // Visual: find all action buttons in this message and toggle
+    var msgEl = document.querySelector('[data-turn-id="' + turnId + '"]');
+    if (msgEl) {
+        var allActionBtns = msgEl.querySelectorAll('[data-action="thumbs-up"], [data-action="thumbs-down"]');
+        allActionBtns.forEach(function (b) { b.className = 'chat-action-btn'; });
+        var btn = msgEl.querySelector('[data-action="' + (rating === 'thumbs_up' ? 'thumbs-up' : 'thumbs-down') + '"]');
+        if (btn) {
+            btn.classList.add('chat-action-btn--active');
+            btn.classList.add(rating === 'thumbs_up' ? 'chat-action-btn--active-thumbs-up' : 'chat-action-btn--active-thumbs-down');
+        }
+    }
+
+    var msg = findChatMessage(turnId);
+    if (msg) msg._feedback = rating;
+    chatLog('feedback', { turnId: turnId, rating: rating });
+
+    // If thumbs-down, show reason textarea
+    if (rating === 'thumbs_down' && msgEl) {
+        var actions = msgEl.querySelector('.chat-message-actions');
+        if (actions && !actions.querySelector('.chat-feedback-reason-wrapper')) {
+            var wrapper = document.createElement('div');
+            wrapper.className = 'chat-feedback-reason-wrapper';
+            wrapper.innerHTML =
+                '<textarea class="chat-feedback-reason" placeholder="Co bylo nie tak? (opcjonalnie)" rows="2"></textarea>' +
+                '<button class="chat-feedback-send" data-action="feedback-send">Wyslij</button>';
+            actions.appendChild(wrapper);
+        }
+    }
+}
+
+/**
+ * @param {Element} wrapper - .chat-feedback-reason-wrapper
+ */
+function sendFeedbackReasonFromWrapper(wrapper) {
+    var textarea = wrapper.querySelector('.chat-feedback-reason');
+    if (!textarea) return;
+    var reason = textarea.value.trim();
+    if (!reason) { wrapper.parentNode.removeChild(wrapper); return; }
+
+    var msgEl = wrapper.closest('[data-turn-id]');
+    var turnId = msgEl ? msgEl.getAttribute('data-turn-id') : '';
+    var url = buildApiUrl(V3_API_BASE, '/agent-chat/feedback', 'POST');
+    fetch(url, {
+        method: 'POST',
+        headers: buildApiHeaders('POST'),
+        body: JSON.stringify({
+            session_id: state.agentChat.sessionId,
+            turn_id: turnId,
+            rating: 'thumbs_down',
+            comment: reason,
+        }),
+        credentials: 'same-origin',
+    }).catch(function () { });
+
+    wrapper.innerHTML = '<p class="detail-muted" style="margin-top:var(--space-2);font-size:var(--font-sm)">Dziekuje za opinie.</p>';
+    chatLog('feedback_reason', { turnId: turnId, reasonLength: reason.length });
+}
+
+/* ── Proposal handlers (enterprise: wired to real API) ───────────── */
+/**
+ * @param {Element} btn
+ * @param {string} proposalId
+ */
+function chatApproveProposal(btn, proposalId) {
+    if (!canCurrentUserDecideActionProposals()) {
+        showError('Tę decyzję może zapisać tylko owner Daszka.');
+        return;
+    }
+    btn.textContent = 'Zatwierdzanie...';
+    btn.disabled = true;
+    btn.classList.remove('chat-proposal-btn--approve');
+    chatLog('proposal_approve_start', { proposalId: proposalId });
+
+    apiFetch(V2_API_BASE, '/action-proposals/' + encodeURIComponent(proposalId) + '/approve', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Zatwierdzone z czatu agenta.' }),
+    })
+        .then(function () {
+            btn.textContent = 'Zatwierdzono';
+            btn.style.borderColor = '#4caf50';
+            btn.style.color = '#2e7d32';
+            chatLog('proposal_approve_ok', { proposalId: proposalId });
+        })
+        .catch(function (err) {
+            btn.textContent = 'Blad';
+            btn.disabled = false;
+            btn.classList.add('chat-proposal-btn--approve');
+            btn.style.borderColor = '#d32f2f';
+            btn.style.color = '#d32f2f';
+            showError(err.message || 'Nie udalo sie zatwierdzic propozycji.');
+            chatLog('proposal_approve_error', { proposalId: proposalId, error: err.message });
+        });
+}
+
+/**
+ * @param {Element} btn
+ * @param {string} proposalId
+ */
+function chatRejectProposal(btn, proposalId) {
+    if (!canCurrentUserDecideActionProposals()) {
+        showError('Tę decyzję może zapisać tylko owner Daszka.');
+        return;
+    }
+    btn.textContent = 'Odrzucanie...';
+    btn.disabled = true;
+    btn.classList.remove('chat-proposal-btn--reject');
+    chatLog('proposal_reject_start', { proposalId: proposalId });
+
+    apiFetch(V2_API_BASE, '/action-proposals/' + encodeURIComponent(proposalId) + '/reject', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Odrzucone przez operatora z czatu.' }),
+    })
+        .then(function () {
+            btn.textContent = 'Odrzucono';
+            btn.style.borderColor = '#ef5350';
+            btn.style.color = '#c62828';
+            chatLog('proposal_reject_ok', { proposalId: proposalId });
+        })
+        .catch(function (err) {
+            btn.textContent = 'Blad';
+            btn.disabled = false;
+            btn.classList.add('chat-proposal-btn--reject');
+            btn.style.borderColor = '#d32f2f';
+            btn.style.color = '#d32f2f';
+            showError(err.message || 'Nie udalo sie odrzucic propozycji.');
+            chatLog('proposal_reject_error', { proposalId: proposalId, error: err.message });
+        });
+}
+
+/**
+ * Best-effort lookup of engagement_id for a proposal.
+ * @param {string} proposalId
+ * @returns {string}
+ */
+function findEngagementIdForProposal(proposalId) {
+    for (var i = 0; i < state.agentChat.messages.length; i++) {
+        var m = state.agentChat.messages[i];
+        if (m.proposals && Array.isArray(m.proposals)) {
+            for (var j = 0; j < m.proposals.length; j++) {
+                if (m.proposals[j].proposal_id === proposalId) {
+                    return m.proposals[j].engagement_id || '';
+                }
+            }
+        }
+    }
+    return '';
+}
+
+/* ── Scroll helpers ──────────────────────────────────────────────── */
+function scrollChatToBottom() {
+    var container = document.getElementById('chat-messages');
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+}
+
+function scrollChatToBottomSmooth() {
+    var container = document.getElementById('chat-messages');
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+}

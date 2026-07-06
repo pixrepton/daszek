@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) exit;
  */
 
 function daszek_get_config() {
-    return [
+    $config = [
         'users' => [
             'konrad' => '$2y$10$/tvQV1r1c.OhtHU8RLnPlu4fEuL1BJktFCq1ybq7ZR3HfhF2c/HZW',
             'darek'  => '$2y$10$PJSnti7IZckFW6xuwVw6yuooiNc7J3/caXTqT.1XBsJOdZznXmbfC',
@@ -40,7 +40,7 @@ function daszek_get_config() {
             'base_url' => defined('DASZEK_NODE_B_API_BASE') ? DASZEK_NODE_B_API_BASE : (getenv('DASZEK_NODE_B_API_BASE') ?: ''),
             'api_token' => defined('DASZEK_NODE_B_API_TOKEN') ? DASZEK_NODE_B_API_TOKEN : (getenv('DASZEK_NODE_B_API_TOKEN') ?: ''),
             'service_token' => defined('DASZEK_NODE_B_SERVICE_TOKEN') ? DASZEK_NODE_B_SERVICE_TOKEN : (getenv('DASZEK_NODE_B_SERVICE_TOKEN') ?: ''),
-            'timeout' => 20,
+            'timeout' => 150,
         ],
     ];
 

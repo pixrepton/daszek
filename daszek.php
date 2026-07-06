@@ -2,14 +2,14 @@
 /**
  * Plugin Name: Daszek
  * Description: System zarzadzania zadaniami i itemami intake dla TOP-INSTAL
- * Version: 1.3.3
+ * Version: 1.3.4
  * Author: TOP-INSTAL
  * Text Domain: daszek
  */
 
 if (!defined('ABSPATH')) exit;
 
-define('DASZEK_VERSION', '1.3.3');
+define('DASZEK_VERSION', '1.3.4');
 define('DASZEK_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('DASZEK_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('DASZEK_DATA_DIR', WP_CONTENT_DIR . '/uploads/daszek/');
@@ -23,6 +23,7 @@ require_once DASZEK_PLUGIN_DIR . 'includes/cycles.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/api.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/api-v2.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/cron.php';
+require_once DASZEK_PLUGIN_DIR . 'includes/proxy-agent-chat.php';
 
 /**
  * Aktywacja wtyczki
@@ -49,6 +50,10 @@ function daszek_activate() {
         wp_schedule_event(time(), 'daily', 'daszek_daily_backup');
     }
 
+    if (!wp_next_scheduled('daszek_bridge_queue_gc')) {
+        wp_schedule_event(time(), 'daily', 'daszek_bridge_queue_gc');
+    }
+
     $config = daszek_get_config();
     if (!empty($config['mail_ingest'])) {
         if (!wp_next_scheduled('daszek_mail_ingest')) {
@@ -70,6 +75,7 @@ register_activation_hook(__FILE__, function() {
  */
 function daszek_deactivate() {
     wp_clear_scheduled_hook('daszek_daily_backup');
+    wp_clear_scheduled_hook('daszek_bridge_queue_gc');
     wp_clear_scheduled_hook('daszek_mail_ingest');
     flush_rewrite_rules();
 }
@@ -100,6 +106,9 @@ function daszek_register_rest_routes() {
         }
         if (function_exists('daszek_api_register_v3_routes')) {
             daszek_api_register_v3_routes();
+        }
+        if (function_exists('daszek_proxy_agent_chat_register_routes')) {
+            daszek_proxy_agent_chat_register_routes();
         }
     }
 }
@@ -157,4 +166,5 @@ add_action('template_redirect', 'daszek_template_redirect');
  * Cron hooks
  */
 add_action('daszek_daily_backup', 'daszek_cron_backup');
+add_action('daszek_bridge_queue_gc', 'daszek_cron_bridge_queue_gc');
 add_action('daszek_mail_ingest', 'daszek_cron_mail_ingest');

@@ -32,6 +32,17 @@ function daszek_cron_backup() {
     }
 }
 
+function daszek_cron_bridge_queue_gc() {
+    if (!function_exists('daszek_v2_bridge_queue_gc')) {
+        return;
+    }
+
+    $removed = daszek_v2_bridge_queue_gc(90);
+    if (is_wp_error($removed)) {
+        error_log('Daszek bridge queue GC error: ' . $removed->get_error_message());
+    }
+}
+
 /**
  * Cron: Mail-Agent (legacy — domyślnie wyłączony).
  *

@@ -218,6 +218,72 @@ function daszek_v2_load_jsonl_store($store) {
     return $items;
 }
 
+function daszek_v2_save_jsonl_store($store, $rows) {
+    $paths = daszek_v2_store_paths();
+    if (!isset($paths[$store]) || !is_array($rows)) {
+        return false;
+    }
+
+    $path = $paths[$store];
+    $tmp_path = $path . '.tmp.' . uniqid('', true);
+    $fp = fopen($tmp_path, 'wb');
+    if (!$fp) {
+        return false;
+    }
+
+    if (!flock($fp, LOCK_EX)) {
+        fclose($fp);
+        @unlink($tmp_path);
+        return false;
+    }
+
+    $ok = true;
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $line = json_encode($row, JSON_UNESCAPED_UNICODE);
+        if ($line === false || fwrite($fp, $line . "\n") === false) {
+            $ok = false;
+            break;
+        }
+    }
+
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    if (!$ok || !rename($tmp_path, $path)) {
+        @unlink($tmp_path);
+        return false;
+    }
+
+    return true;
+}
+
+function daszek_v2_bridge_queue_gc($max_age_days = 90) {
+    $rows = daszek_v2_load_jsonl_store('bridge_queue');
+    $cutoff = strtotime('-' . max(1, (int) $max_age_days) . ' days');
+    $kept = [];
+    $removed = 0;
+
+    foreach ($rows as $row) {
+        $raw_ts = $row['created_at'] ?? $row['ingested_at'] ?? $row['updated_at'] ?? null;
+        $ts = $raw_ts ? strtotime((string) $raw_ts) : false;
+        if ($ts === false || $ts >= $cutoff) {
+            $kept[] = $row;
+        } else {
+            $removed++;
+        }
+    }
+
+    if ($removed > 0 && !daszek_v2_save_jsonl_store('bridge_queue', $kept)) {
+        return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
+    }
+
+    return $removed;
+}
+
 function daszek_v2_pick_projection_entry($payload, $keys) {
     foreach ($keys as $key) {
         if (isset($payload[$key]) && is_array($payload[$key])) {
@@ -230,4 +296,3 @@ function daszek_v2_pick_projection_entry($payload, $keys) {
 require_once __DIR__ . '/store-v2-domain.php';
 require_once __DIR__ . '/store-v2-operator.php';
 require_once __DIR__ . '/store-v2-read.php';
-require_once __DIR__ . '/store-v2-compat.php';

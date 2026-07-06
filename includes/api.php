@@ -26,27 +26,9 @@ function daszek_api_register_routes() {
         'permission_callback' => '__return_true',
     ]);
 
-    register_rest_route($namespace, '/tasks', [
+    register_rest_route($namespace, '/me', [
         'methods' => 'GET',
-        'callback' => 'daszek_api_get_tasks',
-        'permission_callback' => 'daszek_check_auth',
-    ]);
-
-    register_rest_route($namespace, '/tasks', [
-        'methods' => 'POST',
-        'callback' => 'daszek_api_create_task',
-        'permission_callback' => 'daszek_check_auth',
-    ]);
-
-    register_rest_route($namespace, '/tasks/(?P<id>[a-z0-9_]+)', [
-        'methods' => 'PATCH',
-        'callback' => 'daszek_api_update_task',
-        'permission_callback' => 'daszek_check_auth',
-    ]);
-
-    register_rest_route($namespace, '/tasks/(?P<id>[a-z0-9_]+)/done', [
-        'methods' => 'POST',
-        'callback' => 'daszek_api_mark_done',
+        'callback' => 'daszek_api_me',
         'permission_callback' => 'daszek_check_auth',
     ]);
 }
@@ -81,10 +63,21 @@ function daszek_api_csrf(WP_REST_Request $request) {
     ];
 }
 
-function daszek_api_get_tasks(WP_REST_Request $request) {
-    if (function_exists('daszek_v2_get_compatibility_tasks')) {
-        return daszek_v2_get_compatibility_tasks();
+function daszek_api_me(WP_REST_Request $request) {
+    $user = daszek_current_user();
+    if (!is_string($user) || $user === '') {
+        return new WP_Error('unauthorized', 'Brak aktywnej sesji.', ['status' => 401]);
     }
+    $role = function_exists('daszek_api_v2_current_role') ? daszek_api_v2_current_role() : 'unknown';
+    return [
+        'ok' => true,
+        'user' => sanitize_text_field($user),
+        'role' => $role,
+        'csrf_token' => daszek_generate_csrf_token(),
+    ];
+}
+
+function daszek_api_get_tasks(WP_REST_Request $request) {
     return daszek_get_all_tasks();
 }
 
@@ -170,9 +163,6 @@ function daszek_api_update_task(WP_REST_Request $request) {
     if (is_array($task) && isset($task['error'])) {
         return new WP_Error('storage_error', $task['error'], ['status' => 500]);
     }
-    if (!$task && function_exists('daszek_v2_update_compatibility_task')) {
-        $task = daszek_v2_update_compatibility_task($id, $payload);
-    }
     if (is_wp_error($task)) {
         return $task;
     }
@@ -201,9 +191,6 @@ function daszek_api_mark_done(WP_REST_Request $request) {
     $task = daszek_mark_done($id);
     if (is_array($task) && isset($task['error'])) {
         return new WP_Error('storage_error', $task['error'], ['status' => 500]);
-    }
-    if (!$task && function_exists('daszek_v2_mark_compatibility_task_done')) {
-        $task = daszek_v2_mark_compatibility_task_done($id);
     }
     if (is_wp_error($task)) {
         return $task;

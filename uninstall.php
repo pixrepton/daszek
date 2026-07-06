@@ -28,6 +28,7 @@ if (is_dir($data_dir)) {
 
 // Usunięcie zaplanowanych cron jobów
 wp_clear_scheduled_hook('daszek_daily_backup');
+wp_clear_scheduled_hook('daszek_bridge_queue_gc');
 wp_clear_scheduled_hook('daszek_mail_ingest');
 
 // Opcjonalnie: wyczyść sesje

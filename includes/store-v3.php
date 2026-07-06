@@ -95,37 +95,67 @@ function daszek_v3_snapshot_sort_key($row) {
     return '';
 }
 
-function daszek_v3_rewrite_ingress_snapshots($rows) {
-    $path = daszek_v3_ingress_snapshots_path();
-    $tmp_path = $path . '.tmp';
-    $fp = fopen($tmp_path, 'wb');
-    if (!$fp) {
+function daszek_v3_rewrite_jsonl_file($path, $rows) {
+    if (!is_array($rows)) {
         return false;
     }
 
-    flock($fp, LOCK_EX);
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        return false;
+    }
+
+    $lock_fp = fopen($path . '.lock', 'c+');
+    if (!$lock_fp) {
+        return false;
+    }
+
+    if (!flock($lock_fp, LOCK_EX)) {
+        fclose($lock_fp);
+        return false;
+    }
+
+    $tmp_path = $path . '.tmp.' . uniqid('', true);
+    $fp = fopen($tmp_path, 'wb');
+    if (!$fp) {
+        flock($lock_fp, LOCK_UN);
+        fclose($lock_fp);
+        return false;
+    }
+
+    $ok = true;
     foreach ($rows as $row) {
         if (!is_array($row)) {
             continue;
         }
         $line = json_encode($row, JSON_UNESCAPED_UNICODE);
-        if ($line === false) {
-            flock($fp, LOCK_UN);
-            fclose($fp);
-            @unlink($tmp_path);
-            return false;
+        if ($line === false || fwrite($fp, $line . "\n") === false) {
+            $ok = false;
+            break;
         }
-        fwrite($fp, $line . "\n");
     }
-    flock($fp, LOCK_UN);
+
+    if (!fflush($fp)) {
+        $ok = false;
+    }
     fclose($fp);
 
-    if (!rename($tmp_path, $path)) {
-        @unlink($tmp_path);
-        return false;
+    if ($ok && !rename($tmp_path, $path)) {
+        $ok = false;
     }
 
-    return true;
+    if (!$ok) {
+        @unlink($tmp_path);
+    }
+
+    flock($lock_fp, LOCK_UN);
+    fclose($lock_fp);
+
+    return $ok;
+}
+
+function daszek_v3_rewrite_ingress_snapshots($rows) {
+    return daszek_v3_rewrite_jsonl_file(daszek_v3_ingress_snapshots_path(), $rows);
 }
 
 /**
@@ -216,36 +246,7 @@ function daszek_v3_load_operational_feed_snapshots() {
 }
 
 function daszek_v3_rewrite_operational_feed_snapshots($rows) {
-    $path = daszek_v3_operational_feed_snapshots_path();
-    $tmp_path = $path . '.tmp';
-    $fp = fopen($tmp_path, 'wb');
-    if (!$fp) {
-        return false;
-    }
-
-    flock($fp, LOCK_EX);
-    foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $line = json_encode($row, JSON_UNESCAPED_UNICODE);
-        if ($line === false) {
-            flock($fp, LOCK_UN);
-            fclose($fp);
-            @unlink($tmp_path);
-            return false;
-        }
-        fwrite($fp, $line . "\n");
-    }
-    flock($fp, LOCK_UN);
-    fclose($fp);
-
-    if (!rename($tmp_path, $path)) {
-        @unlink($tmp_path);
-        return false;
-    }
-
-    return true;
+    return daszek_v3_rewrite_jsonl_file(daszek_v3_operational_feed_snapshots_path(), $rows);
 }
 
 /**
@@ -336,36 +337,7 @@ function daszek_v3_load_system_health_snapshots() {
 }
 
 function daszek_v3_rewrite_system_health_snapshots($rows) {
-    $path = daszek_v3_system_health_snapshots_path();
-    $tmp_path = $path . '.tmp';
-    $fp = fopen($tmp_path, 'wb');
-    if (!$fp) {
-        return false;
-    }
-
-    flock($fp, LOCK_EX);
-    foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $line = json_encode($row, JSON_UNESCAPED_UNICODE);
-        if ($line === false) {
-            flock($fp, LOCK_UN);
-            fclose($fp);
-            @unlink($tmp_path);
-            return false;
-        }
-        fwrite($fp, $line . "\n");
-    }
-    flock($fp, LOCK_UN);
-    fclose($fp);
-
-    if (!rename($tmp_path, $path)) {
-        @unlink($tmp_path);
-        return false;
-    }
-
-    return true;
+    return daszek_v3_rewrite_jsonl_file(daszek_v3_system_health_snapshots_path(), $rows);
 }
 
 function daszek_v3_upsert_system_health_snapshot($snapshot) {

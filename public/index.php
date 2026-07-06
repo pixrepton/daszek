@@ -25,7 +25,7 @@ $csrf = daszek_generate_csrf_token();
                 <div class="login-copy">
                     <p class="eyebrow">TOP-INSTAL</p>
                     <h1>Daszek</h1>
-                    <p class="subtitle">Operacyjne biurko AI. Spokojne, selektywne i gotowe zanim zaczniesz dzień.</p>
+                    <p class="subtitle">Case OS — biurko operatorskie. Spokojne, selektywne i gotowe zanim zaczniesz dzień.</p>
                 </div>
 
                 <div class="login-card">
@@ -55,7 +55,7 @@ $csrf = daszek_generate_csrf_token();
                 <div class="topbar-brand">
                     <p class="eyebrow">TOP-INSTAL</p>
                     <h1>Daszek</h1>
-                    <p class="topbar-subtitle">Biurko operatorskie — pompy ciepła i serwis</p>
+                    <p class="topbar-subtitle">Case OS — biurko operatorskie (kanał Oferta HVAC osobno)</p>
                 </div>
 
                 <div class="topbar-tools">
@@ -71,19 +71,22 @@ $csrf = daszek_generate_csrf_token();
             </header>
 
             <nav id="view-tabs" class="view-tabs" aria-label="Widoki Daszek">
-                <button type="button" class="view-tab active" data-view="desk">Biurko</button>
-                <button type="button" class="view-tab" data-view="cases">Sprawy</button>
+                <button type="button" class="view-tab active" data-view="desk">Biurko Case OS</button>
+                <button type="button" class="view-tab" data-view="cases">Sprawy Case OS</button>
                 <button type="button" class="view-tab" data-view="day">Dzień</button>
                 <button type="button" class="view-tab" data-view="archive">Archiwum</button>
                 <button type="button" class="view-tab" data-view="tasks">Zadania</button>
+                <button type="button" class="view-tab" data-view="chat">Czat</button>
                 <div class="view-tabs-more">
                     <button type="button" id="view-tabs-more-btn" class="view-tab view-tab-more" aria-haspopup="true" aria-expanded="false">Więcej ▾</button>
                     <div id="view-tabs-more-menu" class="view-tabs-more-menu" hidden>
                         <button type="button" class="view-tab-more-item nav-link" data-view="cockpit">Cockpit</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="quality">Jakość AI</button>
-                        <button type="button" class="view-tab-more-item nav-link" data-view="system">System</button>
+                        <button type="button" class="view-tab-more-item nav-link" data-view="system">System Case OS</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="last_ingress">Ostatni ingress</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="cohort_runs">Kohorty</button>
+                        <button type="button" class="view-tab-more-item nav-link" data-view="decisions">Kolejka decyzji</button>
+                        <button type="button" class="view-tab-more-item nav-link" data-view="constitution">Konstytucja</button>
                     </div>
                 </div>
             </nav>
@@ -113,7 +116,9 @@ $csrf = daszek_generate_csrf_token();
 
     <div id="toast-host" class="toast-host" aria-live="polite" aria-relevant="additions text"></div>
 
-    <script src="<?php echo esc_url(DASZEK_PLUGIN_URL . 'public/app.js?v=' . DASZEK_VERSION); ?>"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="<?php echo esc_url(DASZEK_PLUGIN_URL . 'public/system-diagrams-manifest.js?v=' . DASZEK_VERSION); ?>"></script>
+    <script src="<?php echo esc_url(DASZEK_PLUGIN_URL . 'public/app.js?v=' . DASZEK_VERSION . '.' . filemtime(DASZEK_PLUGIN_DIR . 'public/app.js')); ?>"></script>
 </body>
 </html>
 <?php exit; ?>
