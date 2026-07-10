@@ -43,15 +43,19 @@ const state = {
         cockpit: { substrate: {}, cohort_runs: [] },
         day: { sections: [] },
         cases: { items: [] },
-        quality: { summary: {} },
+        quality: { summary: {}, loadError: null },
         tasks: [],
         lastIngress: { ok: false, snapshot: null, message: '' },
         systemOsEvents: { ok: false, items: [], loadError: null, loading: false },
+        systemObservability: { ok: false, nodeBStatus: null, feedMeta: null, bridgeSummary: null, loadError: null, loading: false },
+        cockpit: { loadError: null },
         decisionQueue: { ok: false, items: [], loadError: null, loading: false },
+        identityMerge: { ok: false, bindingSuggestions: [], emailDuplicates: [], loadError: null, loading: false },
         constitution: { ok: false, data: null, loadError: null, loading: false },
         operationalFeed: { ok: false, snapshot: null, message: '', loadError: null },
         cohortList: { ok: false, items: [], loadError: null },
         caseArchive: { ok: false, items: [], ids: [], loadError: null },
+        mailboxCases: { ok: false, cases: [], loadError: null },
     },
     skrzat: {
         answers: {},
@@ -167,6 +171,32 @@ function clearError() {
     box.style.display = 'none';
 }
 
+function clearStaleDetailOnViewChange() {
+    if (!state.detail) {
+        return;
+    }
+    if (state.detail.type === 'detail_error' || state.detail.type === 'detail_loading') {
+        state.detail = null;
+        setDetailPanelChromeOpen(false);
+        const panel = document.getElementById('detail-panel');
+        if (panel) {
+            panel.innerHTML = '';
+        }
+    }
+}
+
+function navigateToView(next) {
+    const viewKey = normalizeMainViewId(next);
+    if (!viewKey) {
+        return;
+    }
+    clearError();
+    clearStaleDetailOnViewChange();
+    state.currentView = viewKey;
+    syncViewToUrl(viewKey);
+    renderCurrentView();
+}
+
 function showToast(message, type) {
     var host = document.getElementById('toast-host');
     var toast = document.createElement('div');
@@ -270,7 +300,8 @@ function getOperationalFeed() {
     return hasOperationalFeedSnapshot() ? state.data.operationalFeed.snapshot.feed : null;
 }
 
-const KNOWN_OPERATIONAL_FEED_SCHEMA_VERSIONS = new Set(['1', '1.0']);
+const KNOWN_OPERATIONAL_FEED_SCHEMA_VERSIONS = new Set(['1', '1.0', '1.2', '1.3']);
+const SPRAWY_SOURCE = 'mailbox-cases';
 
 function operationalFeedSnapshotMetaLine() {
     if (!hasOperationalFeedSnapshot()) {
@@ -358,8 +389,8 @@ function projectionSectionMissingPreview() {
     return 'Brak w tej projekcji (read-only)';
 }
 
-const PRIMARY_VIEW_TABS = ['desk', 'cases', 'day', 'archive', 'tasks'];
-const MORE_VIEW_TABS = ['cockpit', 'quality', 'system', 'last_ingress', 'cohort_runs', 'decisions', 'constitution'];
+const PRIMARY_VIEW_TABS = ['desk', 'cases', 'day', 'archive'];
+const MORE_VIEW_TABS = ['cockpit', 'quality', 'system', 'last_ingress', 'cohort_runs', 'decisions', 'identity', 'constitution'];
 
 function isGatebTestArtifact(item) {
     if (!item || typeof item !== 'object') {
@@ -1251,6 +1282,7 @@ function operationalStatusPillClass(statusRaw) {
 }
 
 function renderOperationalCaseRecord(item, options = {}) {
+    const previewOnly = Boolean(options.previewOnly);
     const title = firstNonEmpty(item.title, item.case_key, 'Sprawa operacyjna');
     const area = firstNonEmpty(item.business_area_label, businessAreaLabel(item.business_area), item.family_label, caseFamilyLabel(item.family));
     const taskCount = Number(item.open_task_count || item.active_note_count || 0);
@@ -1258,8 +1290,9 @@ function renderOperationalCaseRecord(item, options = {}) {
     const statusLabel = firstNonEmpty(item.status_label, caseStatusLabel(item.status));
     const opHuman = humanizeOperationalStatus(item.operational_status);
     const opPill = opHuman ? `<span class="status-pill ${operationalStatusPillClass(item.operational_status)}">${escapeHtml(opHuman)}</span>` : '';
+    const previewClass = previewOnly ? ' operational-record--preview' : '';
     return `
-        <article class="operational-record operational-record-case">
+        <article class="operational-record operational-record-case${previewClass}">
             <button type="button" class="record-main" data-open-case="${escapeHtml(item.case_id)}" aria-label="${escapeHtml(openCaseLabel)}" aria-controls="detail-panel">
                 <div class="record-top">
                     <span class="record-type">${escapeHtml(area || 'Sprawa')}</span>
@@ -1273,10 +1306,10 @@ function renderOperationalCaseRecord(item, options = {}) {
                     ${caseActivityTimestamp(item) ? `<span>Aktywność: ${escapeHtml(formatDate(caseActivityTimestamp(item)))}</span>` : ''}
                 </div>
             </button>
-            <div class="record-actions">
+            ${previewOnly ? '' : `<div class="record-actions">
                 ${item.case_id && !options.archived ? `<button type="button" class="btn btn-ghost btn-small" data-archive-case="${escapeHtml(item.case_id)}">Archiwizuj</button>` : ''}
                 ${item.case_id && options.archived ? `<button type="button" class="btn btn-secondary btn-small" data-unarchive-case="${escapeHtml(item.case_id)}">Przywróć</button>` : ''}
-            </div>
+            </div>`}
         </article>
     `;
 }
@@ -1937,38 +1970,21 @@ async function loadAllData() {
             apiFetch(V3_API_BASE, '/day'),
             apiFetch(V3_API_BASE, '/cases'),
             apiFetch(V3_API_BASE, '/ai-quality'),
-            apiFetch(V2_API_BASE, '/tasks'),
+            apiFetch(V2_API_BASE, '/mailbox-cases?view=full&limit=500'),
             apiFetch(V3_API_BASE, '/operational-feed-snapshots/latest'),
             apiFetch(V3_API_BASE, '/ingress-quality-snapshots/latest'),
             apiFetch(V3_API_BASE, '/cohort-runs'),
             apiFetch(V3_API_BASE, '/case-archive'),
         ]);
 
-        const [deskResult, cockpitResult, dayResult, casesResult, qualityResult, tasksResult, operationalResult, lastIngressResult, cohortListResult, caseArchiveResult] = requests;
+        const [deskResult, cockpitResult, dayResult, casesResult, qualityResult, mailboxCasesResult, operationalResult, lastIngressResult, cohortListResult, caseArchiveResult] = requests;
 
-        if (deskResult.status === 'fulfilled') {
-            state.data.desk = deskResult.value;
-        }
-        if (cockpitResult.status === 'fulfilled') {
-            state.data.cockpit = cockpitResult.value;
-        }
-        if (dayResult.status === 'fulfilled') {
-            state.data.day = dayResult.value;
-        }
-        if (casesResult.status === 'fulfilled') {
-            state.data.cases = casesResult.value;
-        }
-        if (qualityResult.status === 'fulfilled') {
-            state.data.quality = qualityResult.value;
-        }
-        if (tasksResult.status === 'fulfilled') {
-            state.data.tasks = tasksResult.value;
-        }
-
+        let feedWins = false;
         if (operationalResult.status === 'fulfilled') {
             const v = operationalResult.value;
             if (v && typeof v === 'object' && v.ok && v.snapshot && v.snapshot.feed) {
                 state.data.operationalFeed = { ok: true, snapshot: v.snapshot, message: '', loadError: null };
+                feedWins = true;
             } else if (v && typeof v === 'object' && v.ok) {
                 state.data.operationalFeed = {
                     ok: true,
@@ -1986,6 +2002,51 @@ async function loadAllData() {
                 snapshot: null,
                 message: '',
                 loadError: reason && reason.message ? String(reason.message) : 'Nie udało się pobrać operational feed.',
+            };
+        }
+
+        if (deskResult.status === 'fulfilled' && !feedWins) {
+            state.data.desk = deskResult.value;
+        }
+        if (cockpitResult.status === 'fulfilled') {
+            state.data.cockpit = cockpitResult.value;
+            state.data.cockpit.loadError = null;
+        } else {
+            state.data.cockpit = { loadError: String(cockpitResult.reason && cockpitResult.reason.message ? cockpitResult.reason.message : cockpitResult.reason) };
+        }
+        if (dayResult.status === 'fulfilled' && !feedWins) {
+            state.data.day = dayResult.value;
+        }
+        if (casesResult.status === 'fulfilled' && !feedWins) {
+            state.data.cases = casesResult.value;
+        }
+        if (qualityResult.status === 'fulfilled') {
+            state.data.quality = qualityResult.value;
+            state.data.quality.loadError = null;
+        } else {
+            state.data.quality = { summary: {}, loadError: String(qualityResult.reason && qualityResult.reason.message ? qualityResult.reason.message : qualityResult.reason) };
+        }
+        if (mailboxCasesResult.status === 'fulfilled') {
+            const v = mailboxCasesResult.value;
+            if (v && typeof v === 'object' && v.ok) {
+                state.data.mailboxCases = {
+                    ok: true,
+                    cases: Array.isArray(v.cases) ? v.cases : [],
+                    loadError: null,
+                };
+            } else {
+                state.data.mailboxCases = {
+                    ok: false,
+                    cases: [],
+                    loadError: (v && v.error) ? String(v.error) : 'Nie udało się pobrać rejestru spraw.',
+                };
+            }
+        } else {
+            const reason = mailboxCasesResult.reason;
+            state.data.mailboxCases = {
+                ok: false,
+                cases: [],
+                loadError: reason && reason.message ? String(reason.message) : 'Nie udało się pobrać rejestru spraw.',
             };
         }
 
@@ -2039,6 +2100,7 @@ async function loadAllData() {
         }
 
         renderCurrentView();
+        populateChatCaseSelect();
     } finally {
         if (viewRoot) {
             viewRoot.removeAttribute('aria-busy');
@@ -2046,10 +2108,13 @@ async function loadAllData() {
     }
 }
 
-const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'system', 'last_ingress', 'cohort_runs', 'chat', 'decisions', 'constitution']);
+const KNOWN_MAIN_VIEWS = new Set(['desk', 'cockpit', 'day', 'cases', 'archive', 'quality', 'tasks', 'system', 'last_ingress', 'cohort_runs', 'chat', 'decisions', 'identity', 'constitution']);
 
 function normalizeMainViewId(raw) {
     const id = String(raw || '').trim();
+    if (id === 'tasks') {
+        return 'cases';
+    }
     if (KNOWN_MAIN_VIEWS.has(id)) {
         return id;
     }
@@ -2088,7 +2153,7 @@ function viewConfig() {
         },
         cases: {
             title: 'Sprawy',
-            subtitle: 'Pełny rejestr — przeszukaj wszystkie sprawy. Bieżącą pracę prowadź na Biurku.',
+            subtitle: 'Pełny rejestr: Do zrobienia (w tym zadania firmowe) i Informacyjne. Bieżącą pracę prowadź na Biurku.',
         },
         archive: {
             title: 'Archiwum',
@@ -2097,10 +2162,6 @@ function viewConfig() {
         quality: {
             title: 'Jakość AI',
             subtitle: 'Prosty panel trafności, decyzji i problemów z feedbacku.',
-        },
-        tasks: {
-            title: 'Zadania',
-            subtitle: 'Widok przejściowy i warstwa zgodności.',
         },
         last_ingress: {
             title: 'Ostatni ingress',
@@ -2122,11 +2183,25 @@ function viewConfig() {
             title: 'Kolejka decyzji',
             subtitle: 'Decyzje oczekujace na operatora — zatwierdz, odrzuc lub przegladaj szczegoly.',
         },
+        identity: {
+            title: 'Tożsamość klientów',
+            subtitle: 'Sugestie wiązania tożsamości (NIP, telefon, nazwa) — zatwierdź lub odrzuć scalenie.',
+        },
         constitution: {
             title: 'Konstytucja',
             subtitle: 'Dokument konstytucji systemu Case OS — reguly, narzedzia i granice dzialania agenta.',
         },
     };
+}
+
+function setMoreMenuOpen(open) {
+    const moreBtn = document.getElementById('view-tabs-more-btn');
+    const moreMenu = document.getElementById('view-tabs-more-menu');
+    if (!moreBtn || !moreMenu) {
+        return;
+    }
+    moreMenu.hidden = !open;
+    moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 function installDaszekNavHandlers() {
@@ -2140,9 +2215,7 @@ function installDaszekNavHandlers() {
         if (moreItem && app.contains(moreItem)) {
             const next = resolveNavButtonViewId(moreItem);
             if (next) {
-                state.currentView = next;
-                syncViewToUrl(next);
-                renderCurrentView();
+                navigateToView(next);
                 const menu = document.getElementById('view-tabs-more-menu');
                 if (menu) {
                     menu.hidden = true;
@@ -2177,6 +2250,21 @@ function installDaszekNavHandlers() {
                 }
                 return;
             }
+            const bindingApproveBtn = event.target.closest('[data-identity-binding-approve]');
+            if (bindingApproveBtn && app.contains(bindingApproveBtn)) {
+                decideIdentityBindingSuggestion(bindingApproveBtn.getAttribute('data-identity-binding-approve'), 'approved');
+                return;
+            }
+            const bindingRejectBtn = event.target.closest('[data-identity-binding-reject]');
+            if (bindingRejectBtn && app.contains(bindingRejectBtn)) {
+                decideIdentityBindingSuggestion(bindingRejectBtn.getAttribute('data-identity-binding-reject'), 'rejected');
+                return;
+            }
+            const bindingScanBtn = event.target.closest('[data-identity-binding-scan]');
+            if (bindingScanBtn && app.contains(bindingScanBtn)) {
+                void scanIdentityBindingSuggestions(bindingScanBtn);
+                return;
+            }
             return;
         }
         const next = resolveNavButtonViewId(button);
@@ -2184,19 +2272,17 @@ function installDaszekNavHandlers() {
             console.warn('Daszek nav: brak lub nieznany atrybut data-view', button);
             return;
         }
-        state.currentView = next;
-        syncViewToUrl(next);
-        renderCurrentView();
+        navigateToView(next);
     });
     const moreBtn = document.getElementById('view-tabs-more-btn');
     const moreMenu = document.getElementById('view-tabs-more-menu');
     if (moreBtn && moreMenu) {
         moreBtn.addEventListener('click', event => {
             event.stopPropagation();
-            moreMenu.hidden = !moreMenu.hidden;
+            setMoreMenuOpen(moreMenu.hidden);
         });
         document.addEventListener('click', () => {
-            moreMenu.hidden = true;
+            setMoreMenuOpen(false);
         });
     }
 }
@@ -2242,15 +2328,21 @@ function updateSidebarSummary() {
     if (hasOperationalFeedSnapshot()) {
         const feed = getOperationalFeed();
         visible = (feed.desk || []).length;
-        casesCount = (feed.cases || []).length;
         const sections = ((feed.day || {}).sections || []);
         nowCount = sections.find(section => section.key === 'teraz')?.items?.length || 0;
         if (!nowCount && (!sections.length || !sections.some(s => (s.items || []).length))) {
-            nowCount = Math.min(3, casesCount);
+            nowCount = Math.min(3, (feed.cases || []).length);
         }
     } else {
         visible = (state.data.desk.items || []).length;
         nowCount = (state.data.day.sections || []).find(section => section.key === 'teraz')?.items.length || 0;
+    }
+    const mc = state.data.mailboxCases || {};
+    if (mc.ok && Array.isArray(mc.cases)) {
+        casesCount = mc.cases.length;
+    } else if (hasOperationalFeedSnapshot()) {
+        casesCount = (getOperationalFeed().cases || []).length;
+    } else {
         casesCount = (state.data.cases.items || []).length;
     }
 
@@ -2270,6 +2362,7 @@ function updateSidebarSummary() {
 }
 
 function renderCurrentView() {
+    clearError();
     updateSidebarSummary();
     const configs = viewConfig();
     let viewKey = normalizeMainViewId(state.currentView);
@@ -2304,10 +2397,12 @@ function renderCurrentView() {
         void startChatViewLoad();
     } else if (viewKey === 'decisions') {
         void startDecisionQueueViewLoad();
+    } else if (viewKey === 'identity') {
+        void startIdentityMergeViewLoad();
     } else if (viewKey === 'constitution') {
         void startConstitutionViewLoad();
     } else {
-        renderTasksView();
+        renderDeskView();
     }
 }
 
@@ -2360,6 +2455,14 @@ function renderFeedAttentionSummary(feed) {
     `;
 }
 
+function getFeedActionItems(feed) {
+    const f = feed || {};
+    if (Array.isArray(f.action_items) && f.action_items.length) {
+        return f.action_items;
+    }
+    return Array.isArray(f.tasks) ? f.tasks : [];
+}
+
 function buildFeedDaySections(feed) {
     const dayObj = feed.day || {};
     const raw = Array.isArray(dayObj.sections) ? dayObj.sections : [];
@@ -2374,7 +2477,7 @@ function buildFeedDaySections(feed) {
         item.operator_brief_pl,
         item.case_id,
     ])).slice(0, 10);
-    const taskItems = (feed.tasks || []).filter(item => matchesSearch([
+    const taskItems = getFeedActionItems(feed).filter(item => matchesSearch([
         item.title,
         item.summary,
         item.linked_case_id,
@@ -2392,8 +2495,8 @@ function buildFeedDaySections(feed) {
     if (taskItems.length) {
         sections.push({
             key: 'feed_tasks',
-            title: 'Zadania w snapshotcie',
-            subtitle: 'Z operational feed',
+            title: 'Sugerowane działania',
+            subtitle: 'Propozycje agenta do zatwierdzenia — nie są to zadania wewnętrzne',
             items: taskItems,
             renderKind: 'task',
         });
@@ -2487,8 +2590,27 @@ function renderDeskView() {
         item.sender_name,
         item.customer_email,
     ]));
+    const actionItems = getFeedActionItems(feed).filter(item => !isGatebTestArtifact(item)).filter(item => matchesSearch([
+        item.title,
+        item.summary,
+        item.linked_case_id,
+        item.source_type,
+    ])).slice(0, 8);
 
-    if (!items.length) {
+    const actionSectionHtml = actionItems.length ? `
+        <section class="section-block registry-section registry-section--action">
+            <div class="registry-section-header">
+                <h4>Sugerowane działania</h4>
+                <span class="registry-count">${escapeHtml(String(actionItems.length))}</span>
+            </div>
+            <p class="detail-muted">Propozycje agenta do zatwierdzenia — nie są to zadania wewnętrzne.</p>
+            <div class="operational-list operational-list--registry">
+                ${actionItems.map(item => renderFeedTaskRow(item, { compact: true })).join('')}
+            </div>
+        </section>
+    ` : '';
+
+    if (!items.length && !actionItems.length) {
         root.innerHTML = wrapOperationalViewShell('Biurko', `
             ${renderFeedAttentionSummary(feed)}
             <section class="empty-state ds-state">
@@ -2499,12 +2621,16 @@ function renderDeskView() {
         return;
     }
 
-    const sections = groupDeskItems(items);
+    const deskBoardHtml = items.length
+        ? `<div class="ops-board">
+            ${groupDeskItems(items).map(section => renderOperationalSection(section, { limit: section.key === 'now' ? 5 : 8, showDone: false })).join('')}
+        </div>`
+        : '';
+
     root.innerHTML = wrapOperationalViewShell('Biurko', `
         ${renderFeedAttentionSummary(feed)}
-        <div class="ops-board">
-            ${sections.map(section => renderOperationalSection(section, { limit: section.key === 'now' ? 5 : 8, showDone: false })).join('')}
-        </div>
+        ${deskBoardHtml}
+        ${actionSectionHtml}
     `);
 }
 
@@ -2531,6 +2657,21 @@ function cockpitProjectionFootnote(caseCount, cohortCount, substrate) {
 
 function renderCockpitView() {
     const cockpit = state.data.cockpit || {};
+    if (cockpit.loadError) {
+        const root = document.getElementById('view-root');
+        root.innerHTML = wrapDaszekViewShell(['Cockpit V3'], `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Błąd wczytywania Cockpit</h3>
+                <p class="error-inline">${escapeHtml(cockpit.loadError)}</p>
+                <button type="button" class="btn btn-primary btn-small" id="cockpit-retry-btn">Spróbuj ponownie</button>
+            </section>
+        `);
+        const retryBtn = document.getElementById('cockpit-retry-btn');
+        if (retryBtn) {
+            retryBtn.addEventListener('click', () => { void loadAllData(); });
+        }
+        return;
+    }
     const substrate = cockpit.substrate || {};
     const cohortRuns = cockpit.cohort_runs || [];
     const cases = ((cockpit.cases || {}).items || state.data.cases.items || []).filter(item => matchesSearch([
@@ -2763,7 +2904,7 @@ function renderDayView() {
         root.innerHTML = wrapOperationalViewShell('Dzień operacyjny', `
             <section class="empty-state ds-state">
                 <h3>Brak wpisów na dziś</h3>
-                <p>Snapshot operacyjny nie zawiera jeszcze planu dnia i nie ma spraw ani zadań do pokazania.</p>
+                <p>Snapshot operacyjny nie zawiera jeszcze planu dnia i nie ma spraw ani sugerowanych działań do pokazania.</p>
                 ${projectionBoundaryHtml()}
             </section>
         `);
@@ -2771,7 +2912,7 @@ function renderDayView() {
     }
 
     const banner = usedFallback
-        ? '<p class="detail-muted feed-day-fallback">Snapshot nie zawiera jeszcze planu dnia. Pokazuję najbliższe sprawy i zadania.</p>'
+        ? '<p class="detail-muted feed-day-fallback">Snapshot nie zawiera jeszcze planu dnia. Pokazuję najbliższe sprawy i sugerowane działania.</p>'
         : '';
 
     root.innerHTML = wrapOperationalViewShell('Dzień operacyjny', `
@@ -2792,42 +2933,177 @@ function renderDayView() {
     `);
 }
 
+function caseRowRequiresAction(row) {
+    if (!row || typeof row !== 'object') {
+        return true;
+    }
+    if (row.requires_action !== undefined) {
+        return Boolean(row.requires_action);
+    }
+    const meta = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    if (meta.requires_action !== undefined) {
+        return Boolean(meta.requires_action);
+    }
+    return true;
+}
+
+function enrichRegistryCaseRow(row) {
+    const cid = String(row.case_id || '').trim();
+    if (!cid || isCaseArchived(cid) || isGatebTestArtifact(row)) {
+        return null;
+    }
+    const feedRecord = findCaseRecordById(cid);
+    const meta = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const base = feedRecord ? { ...feedRecord } : {
+        case_id: cid,
+        title: firstNonEmpty(row.subject, meta.task_title, cid),
+        family: row.case_family || '',
+        family_label: caseFamilyLabel(row.case_family),
+        summary: meta.priority_label || '',
+        latest_signal_at: row.latest_signal_at || row.updated_at || row.created_at || '',
+    };
+    base.requires_action = caseRowRequiresAction(row);
+    return base;
+}
+
+function firmTasksFromState() {
+    const payload = state.data.tasks || {};
+    let tasks = [];
+    if (Array.isArray(payload.tasks)) {
+        tasks = payload.tasks;
+    } else if (Array.isArray(payload)) {
+        tasks = payload;
+    }
+    if (tasks.length) {
+        return tasks;
+    }
+    const mailboxCases = state.data.mailboxCases && Array.isArray(state.data.mailboxCases.cases)
+        ? state.data.mailboxCases.cases
+        : [];
+    return mailboxCases
+        .filter((row) => {
+            const meta = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+            const sk = String(meta.source_kind || row.source_kind || '').trim();
+            const family = String(row.case_family || '').trim();
+            const isManual = sk === 'manual' && family === 'operations';
+            const requires = row.requires_action !== false && meta.requires_action !== false;
+            return isManual && requires;
+        })
+        .map((row) => {
+            const meta = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+            return {
+                case_id: row.case_id,
+                case_family: row.case_family || 'operations',
+                task_title: meta.task_title || row.subject || '',
+                source_kind: meta.source_kind || 'manual',
+                task_status: meta.task_status || 'confirmed',
+                priority: meta.priority || 'normalny',
+                scheduled_at: meta.scheduled_at || '',
+                source_email_id: meta.source_email_id || '',
+                task_confidence: meta.task_confidence || '',
+                reasoning_pl: meta.reasoning_pl || '',
+                created_at: row.created_at || '',
+                updated_at: row.updated_at || '',
+            };
+        });
+}
+
+function buildFirmTasksPanelHtml(tasks) {
+    const confident = tasks.filter(t => t.source_kind === 'agent_confident' && t.task_status === 'pending');
+    const active = tasks.filter(t => t.task_status === 'confirmed');
+    const uncertain = tasks.filter(t => t.source_kind === 'agent_uncertain' && t.task_status === 'pending');
+
+    let html = '<section class="registry-firm-tasks section-block">';
+    html += '<div class="section-header"><div><h4>Zadania firmowe</h4>';
+    html += '<p class="detail-muted">Sprawy wewnętrzne (ZUS, auto, faktury). Leady HVAC są w sekcji spraw klientów poniżej.</p></div>';
+    html += '<button id="task-new-btn" type="button" class="btn btn-primary btn-small">+ Nowe zadanie</button></div>';
+
+    html += '<div id="task-new-form" class="task-new-form" style="display:none;">';
+    html += '<label><span>Tytuł</span><input type="text" id="task-title" placeholder="Np. Firmowe auto — naprawić hamulec"></label>';
+    html += '<div class="task-new-form-row"><label><span>Priorytet</span><select id="task-priority"><option value="normalny" selected>normalny</option><option value="pilne">pilne</option><option value="niski">niski</option></select></label>';
+    html += '<label><span>Data/godzina (opcjonalnie)</span><input type="text" id="task-scheduled" placeholder="np. 2026-07-05 11:00"></label></div>';
+    html += '<div class="task-new-form-actions"><button id="task-create-btn" type="button" class="btn btn-primary">Dodaj</button><button id="task-cancel-btn" type="button" class="btn btn-ghost">Anuluj</button></div>';
+    html += '</div>';
+
+    html += '<div class="registry-task-group"><h5>Do potwierdzenia (od agenta)</h5>';
+    if (confident.length) {
+        confident.forEach(t => { html += taskCardHtml(t, 'pending'); });
+    } else {
+        html += '<p class="detail-muted">Brak zadań do potwierdzenia.</p>';
+    }
+    html += '</div>';
+
+    html += '<div class="registry-task-group"><h5>Aktywne zadania</h5>';
+    if (active.length) {
+        active.sort((a, b) => (a.priority === 'pilne' ? -1 : 0) - (b.priority === 'pilne' ? -1 : 0)).forEach(t => { html += taskCardHtml(t, 'active'); });
+    } else {
+        html += '<p class="detail-muted">Brak aktywnych zadań firmowych.</p>';
+    }
+    html += '</div>';
+
+    html += '<div class="registry-task-group"><h5>Sugestie agenta (niepewne)</h5>';
+    if (uncertain.length) {
+        uncertain.forEach(t => { html += taskCardHtml(t, 'uncertain'); });
+    } else {
+        html += '<p class="detail-muted">Brak sugestii.</p>';
+    }
+    html += '</div>';
+
+    html += '<details class="registry-task-archive"><summary>Pokaż archiwum zadań</summary><div id="task-archive"><button id="task-archive-load" type="button" class="btn btn-ghost btn-small">Załaduj archiwum</button></div></details>';
+    html += '</section>';
+    return html;
+}
+
+function bindFirmTasksPanel(root) {
+    const newBtn = root.querySelector('#task-new-btn');
+    const cancelBtn = root.querySelector('#task-cancel-btn');
+    const createBtn = root.querySelector('#task-create-btn');
+    const archiveBtn = root.querySelector('#task-archive-load');
+    const taskForm = root.querySelector('#task-new-form');
+    if (newBtn && taskForm) {
+        newBtn.addEventListener('click', () => { taskForm.style.display = 'block'; });
+    }
+    if (cancelBtn && taskForm) {
+        cancelBtn.addEventListener('click', () => { taskForm.style.display = 'none'; });
+    }
+    if (createBtn) {
+        createBtn.addEventListener('click', () => { void createManualTask(); });
+    }
+    if (archiveBtn) {
+        archiveBtn.addEventListener('click', loadArchive);
+    }
+}
+
+async function refreshRegistryViewAfterTaskMutation() {
+    await loadAllData();
+    if (normalizeMainViewId(state.currentView) === 'cases') {
+        renderCasesView();
+    }
+}
+
 function renderCasesView() {
     const root = document.getElementById('view-root');
-    const op = state.data.operationalFeed || {};
+    const mc = state.data.mailboxCases || {};
 
-    if (op.loadError) {
+    if (mc.loadError) {
         root.innerHTML = wrapOperationalViewShell('Sprawy', `
             <section class="empty-state ds-state ds-state--error" role="alert">
-                <h3>Nie udało się pobrać operational feed</h3>
-                <p>${escapeHtml(op.loadError)}</p>
+                <h3>Nie udało się pobrać rejestru spraw</h3>
+                <p>${escapeHtml(mc.loadError)}</p>
+                <p class="detail-muted">Endpoint <code>/daszek/v2/mailbox-cases</code> proxy do Node B <code>GET /cases</code>.</p>
             </section>
         `);
         return;
     }
 
-    if (!hasOperationalFeedSnapshot()) {
-        const msg = op.message ? escapeHtml(String(op.message)) : 'Operational feed nie został jeszcze zapisany w Daszek V3.';
-        root.innerHTML = wrapOperationalViewShell('Sprawy', `
-            <section class="empty-state ds-state">
-                <h3>Brak zasilenia spraw z Node B</h3>
-                <p>${msg}</p>
-                <p class="detail-muted">Docelowy widok PRO czyta wyłącznie operational feed V3. Uruchom eksporter <code>daszek_v3_operational_feed.py</code> i wyślij snapshot (service token / bridge token).</p>
-                ${projectionBoundaryHtml()}
-            </section>
-        `);
-        return;
-    }
-
-    const feed = getOperationalFeed();
-    const items = sortCasesChronologically((feed.cases || []).filter(item => {
-        if (isGatebTestArtifact(item)) {
-            return false;
+    const rawCases = Array.isArray(mc.cases) ? mc.cases : [];
+    const enriched = [];
+    rawCases.forEach(row => {
+        const item = enrichRegistryCaseRow(row);
+        if (!item) {
+            return;
         }
-        if (isCaseArchived(item.case_id)) {
-            return false;
-        }
-        return matchesSearch([
+        if (!matchesSearch([
             item.operator_essence_pl,
             item.title,
             item.summary,
@@ -2838,35 +3114,64 @@ function renderCasesView() {
             item.case_id,
             item.sender_name,
             item.customer_email,
-        ]);
-    }));
+            item.customer_name,
+        ])) {
+            return;
+        }
+        enriched.push(item);
+    });
 
-    if (!items.length) {
+    const actionItems = sortCasesChronologically(enriched.filter(item => item.requires_action !== false));
+    const infoItems = sortCasesChronologically(enriched.filter(item => item.requires_action === false));
+    const firmTasksHtml = buildFirmTasksPanelHtml(firmTasksFromState());
+    const searchActive = Boolean(String(state.search || '').trim());
+    const totalCount = actionItems.length + infoItems.length;
+
+    if (!totalCount && !firmTasksFromState().length) {
         root.innerHTML = wrapOperationalViewShell('Sprawy', `
             <section class="empty-state ds-state">
-                <h3>Brak aktywnych spraw</h3>
-                <p>Operational feed nie zawiera spraw pasujących do wyszukiwania albo wszystkie są w archiwum.</p>
+                <h3>Brak spraw w rejestrze</h3>
+                <p>Magazyn Node B nie zawiera aktywnych spraw klientów pasujących do wyszukiwania.</p>
+                ${firmTasksHtml}
             </section>
+            ${projectionBoundaryHtml()}
         `);
+        bindFirmTasksPanel(root);
         return;
     }
 
-    const searchActive = Boolean(String(state.search || '').trim());
     root.innerHTML = wrapOperationalViewShell('Sprawy', `
         <section class="registry-header">
             <div class="registry-header-row">
                 <h3>Rejestr spraw</h3>
-                <span class="registry-count">${escapeHtml(String(items.length))}</span>
+                <span class="registry-count">${escapeHtml(String(totalCount))}</span>
             </div>
             <p class="detail-muted">${searchActive
-            ? 'Wyniki wyszukiwania w rejestrze spraw.'
-            : 'Wszystkie aktywne sprawy. Szukaj po nadawcy, temacie lub treści — bieżącą pracę prowadź na Biurku.'}</p>
+            ? 'Wyniki wyszukiwania w rejestrze spraw (Node B).'
+            : 'Pełny rejestr z magazynu Node B — nie tylko podzbiór z Biurka. Bieżącą pracę prowadź na Biurku.'}</p>
         </section>
-        <section class="operational-list operational-list--registry">
-            ${items.map(item => renderOperationalCaseRecord(item)).join('')}
+        <section class="registry-section registry-section--action">
+            <div class="registry-section-header">
+                <h4>Do zrobienia</h4>
+                <span class="registry-count">${escapeHtml(String(actionItems.length))}</span>
+            </div>
+            ${firmTasksHtml}
+            ${actionItems.length
+            ? `<div class="operational-list operational-list--registry">${actionItems.map(item => renderOperationalCaseRecord(item)).join('')}</div>`
+            : '<p class="detail-muted">Brak spraw klientów wymagających działania (zadania firmowe powyżej).</p>'}
+        </section>
+        <section class="registry-section registry-section--info">
+            <div class="registry-section-header">
+                <h4>Informacyjne</h4>
+                <span class="registry-count">${escapeHtml(String(infoItems.length))}</span>
+            </div>
+            ${infoItems.length
+            ? `<div class="operational-list operational-list--registry">${infoItems.map(item => renderOperationalCaseRecord(item, { previewOnly: true })).join('')}</div>`
+            : '<p class="detail-muted">Brak spraw informacyjnych.</p>'}
         </section>
         ${projectionBoundaryHtml()}
     `);
+    bindFirmTasksPanel(root);
 }
 
 function renderArchiveView() {
@@ -2926,7 +3231,22 @@ function renderArchiveView() {
 
 function renderQualityView() {
     const root = document.getElementById('view-root');
-    const summary = (state.data.quality && state.data.quality.summary) || {};
+    const quality = state.data.quality || {};
+    if (quality.loadError) {
+        root.innerHTML = wrapDaszekViewShell(['Jakość AI'], `
+            <section class="empty-state ds-state ds-state--error" role="alert">
+                <h3>Błąd wczytywania jakości AI</h3>
+                <p class="error-inline">${escapeHtml(quality.loadError)}</p>
+                <button type="button" class="btn btn-primary btn-small" id="quality-retry-btn">Spróbuj ponownie</button>
+            </section>
+        `);
+        const retryBtn = document.getElementById('quality-retry-btn');
+        if (retryBtn) {
+            retryBtn.addEventListener('click', () => { void loadAllData(); });
+        }
+        return;
+    }
+    const summary = quality.summary || {};
     const tags = summary.top_problem_tags || [];
     const feedback = summary.recent_feedback || [];
     const ai = Number(summary.total_ai_suggestions || 0);
@@ -3036,15 +3356,19 @@ async function startSystemViewLoad() {
     const requestId = ++systemViewRequestId;
     state.data.systemOsEvents = { ok: false, items: [], loadError: null, loading: true };
     state.data.systemHealth = { ok: false, snapshot: null, loadError: null, loading: true };
+    state.data.systemObservability = { ok: false, nodeBStatus: null, feedMeta: null, bridgeSummary: null, loadError: null, loading: true };
     root.innerHTML = wrapDaszekViewShell(['System'], `
         <section class="detail-section detail-section-os-events">
             <h3>Oś systemu</h3>
             <p class="detail-muted" role="status">Wczytywanie zdarzeń systemowych…</p>
         </section>
     `);
-    const [eventsResult, healthResult] = await Promise.allSettled([
+    const [eventsResult, healthResult, statusResult, feedResult, bridgeResult] = await Promise.allSettled([
         apiFetch(V3_API_BASE, '/system/os-events/recent'),
         apiFetch(V3_API_BASE, '/system-health-snapshots/latest'),
+        apiFetch(V3_API_BASE, '/system/health/status'),
+        apiFetch(V3_API_BASE, '/operational-feed-snapshots/latest'),
+        apiFetch(V3_API_BASE, '/system/bridge-queue/summary'),
     ]);
     if (requestId !== systemViewRequestId || normalizeMainViewId(state.currentView) !== 'system') {
         return;
@@ -3084,6 +3408,41 @@ async function startSystemViewLoad() {
             loading: false,
         };
     }
+    const obsErrors = [];
+    let nodeBStatus = null;
+    let feedMeta = null;
+    let bridgeSummary = null;
+    if (statusResult.status === 'fulfilled') {
+        nodeBStatus = statusResult.value;
+    } else {
+        obsErrors.push(String(statusResult.reason && statusResult.reason.message ? statusResult.reason.message : statusResult.reason));
+    }
+    if (feedResult.status === 'fulfilled') {
+        const feedData = feedResult.value;
+        const snap = feedData && feedData.snapshot ? feedData.snapshot : null;
+        if (snap) {
+            feedMeta = {
+                snapshot_id: snap.snapshot_id || '',
+                ingested_at: snap.ingested_at || snap.created_at || '',
+                case_count: Array.isArray(snap.feed && snap.feed.cases) ? snap.feed.cases.length : null,
+            };
+        }
+    } else {
+        obsErrors.push(String(feedResult.reason && feedResult.reason.message ? feedResult.reason.message : feedResult.reason));
+    }
+    if (bridgeResult.status === 'fulfilled') {
+        bridgeSummary = bridgeResult.value;
+    } else {
+        obsErrors.push(String(bridgeResult.reason && bridgeResult.reason.message ? bridgeResult.reason.message : bridgeResult.reason));
+    }
+    state.data.systemObservability = {
+        ok: obsErrors.length === 0,
+        nodeBStatus,
+        feedMeta,
+        bridgeSummary,
+        loadError: obsErrors.length ? obsErrors.join(' · ') : null,
+        loading: false,
+    };
     renderSystemView();
     initMermaidDiagrams();
 }
@@ -3121,21 +3480,82 @@ function renderSystemHealthStrip(snapshot) {
     `;
 }
 
+function renderSystemObservabilityDashboard() {
+    const bundle = state.data.systemOsEvents || {};
+    const healthBundle = state.data.systemHealth || {};
+    const obs = state.data.systemObservability || {};
+    const nodeB = obs.nodeBStatus && typeof obs.nodeBStatus === 'object' ? obs.nodeBStatus : {};
+    const nodeBStatus = String(nodeB.status || nodeB.health || (obs.nodeBStatus ? 'ok' : 'unknown')).trim();
+    const nodeBClass = nodeBStatus === 'ok' || nodeBStatus === 'healthy' ? 'is-ok' : (nodeBStatus === 'degraded' ? 'is-warning' : 'is-muted');
+    const feedMeta = obs.feedMeta || {};
+    const feedWhen = feedMeta.ingested_at ? formatDate(feedMeta.ingested_at) : '—';
+    const feedAge = feedMeta.ingested_at ? humanizeAge(feedMeta.ingested_at) : 'brak danych';
+    const eventCount = Array.isArray(bundle.items) ? bundle.items.length : 0;
+    const riskFlags = Array.isArray(nodeB.risk_flags) ? nodeB.risk_flags : [];
+    const riskCount = riskFlags.length;
+    const riskClass = riskCount > 0 ? 'is-warning' : 'is-ok';
+    const bridge = obs.bridgeSummary && typeof obs.bridgeSummary === 'object' ? obs.bridgeSummary : {};
+    const bridgePending = bridge.pending_count != null ? Number(bridge.pending_count) : 0;
+    const bridgeOldest = bridge.oldest_created_at ? humanizeAge(bridge.oldest_created_at) : '—';
+    const bridgeStuck = bridge.stuck_count != null ? Number(bridge.stuck_count) : 0;
+    const bridgeClass = bridgeStuck > 0 ? 'is-warning' : (bridgePending > 0 ? 'is-muted' : 'is-ok');
+    const healthErr = healthBundle.loadError ? `<p class="error-inline" role="alert">${escapeHtml(healthBundle.loadError)}</p>` : '';
+    const obsErr = obs.loadError ? `<p class="error-inline" role="alert">${escapeHtml(obs.loadError)}</p>` : '';
+    return `
+        <section class="detail-section system-observability-dashboard">
+            <h3>Observability</h3>
+            <p class="detail-muted">Szybki podgląd zdrowia stosu — feed, Node B, bridge queue, risk flags, zdarzenia OS.</p>
+            ${healthErr}
+            ${obsErr}
+            <div class="system-obs-grid">
+                <article class="system-obs-card ${nodeBClass}">
+                    <h4>Node B</h4>
+                    <p class="system-obs-value">${escapeHtml(nodeBStatus)}</p>
+                    <p class="detail-muted">Proxy: /system/health/status</p>
+                </article>
+                <article class="system-obs-card">
+                    <h4>Feed operacyjny</h4>
+                    <p class="system-obs-value">${escapeHtml(feedAge)}</p>
+                    <p class="detail-muted">${escapeHtml(feedWhen)}${feedMeta.case_count != null ? ` · ${feedMeta.case_count} spraw` : ''}</p>
+                </article>
+                <article class="system-obs-card ${bridgeClass}">
+                    <h4>Bridge queue</h4>
+                    <p class="system-obs-value">${bridgePending} pending</p>
+                    <p class="detail-muted">Najstarszy: ${escapeHtml(bridgeOldest)}${bridgeStuck > 0 ? ` · ${bridgeStuck} stuck` : ''}</p>
+                </article>
+                <article class="system-obs-card ${riskClass}">
+                    <h4>Risk flags</h4>
+                    <p class="system-obs-value">${riskCount}</p>
+                    <p class="detail-muted">Deterministyczne reguły Node B</p>
+                </article>
+                <article class="system-obs-card">
+                    <h4>Zdarzenia OS</h4>
+                    <p class="system-obs-value">${eventCount}</p>
+                    <p class="detail-muted">Ostatnia projekcja z Node B</p>
+                </article>
+            </div>
+        </section>
+    `;
+}
+
+function humanizeAge(iso) {
+    const t = Date.parse(String(iso || ''));
+    if (!Number.isFinite(t)) return '—';
+    const mins = Math.round((Date.now() - t) / 60000);
+    if (mins < 1) return 'przed chwilą';
+    if (mins < 60) return `${mins} min temu`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 48) return `${hrs} h temu`;
+    const days = Math.round(hrs / 24);
+    return `${days} d temu`;
+}
+
 function renderSystemView() {
     const root = document.getElementById('view-root');
     const bundle = state.data.systemOsEvents || {};
     const healthBundle = state.data.systemHealth || {};
-    if (bundle.loading || healthBundle.loading) {
-        return;
-    }
-    if (bundle.loadError) {
-        root.innerHTML = wrapDaszekViewShell(['System'], `
-            <section class="detail-section detail-section-os-events">
-                <h3>Oś systemu</h3>
-                <p class="error-inline" role="alert">${escapeHtml(bundle.loadError)}</p>
-                <p class="detail-muted">Read-only projekcja z Node B — nie magazyn prawdy.</p>
-            </section>
-        `);
+    const obsBundle = state.data.systemObservability || {};
+    if (bundle.loading || healthBundle.loading || obsBundle.loading) {
         return;
     }
     const items = Array.isArray(bundle.items) ? bundle.items : [];
@@ -3158,11 +3578,16 @@ function renderSystemView() {
             ${eid ? `<p class="detail-muted os-event-engagement">engagement: ${escapeHtml(eid)}</p>` : ''}
         </li>`;
     }).join('');
+    const eventsError = bundle.loadError
+        ? `<p class="error-inline" role="alert">${escapeHtml(bundle.loadError)}</p>`
+        : '';
     root.innerHTML = wrapDaszekViewShell(['System'], `
+        ${renderSystemObservabilityDashboard()}
         ${renderSystemHealthStrip(healthBundle.snapshot)}
         <section class="detail-section detail-section-os-events">
             <h3>Oś systemu</h3>
             <p class="detail-muted">Read-only timeline zdarzeń cross-repo (Node B). Nie zastępuje dziennika sprawy ani workflow Cieplo w jego DB.</p>
+            ${eventsError}
             ${items.length ? `<ul class="os-event-list">${rows}</ul>` : '<p class="detail-muted">Brak zdarzeń systemowych.</p>'}
         </section>
         ${renderSystemDiagramsSection()}
@@ -3182,7 +3607,7 @@ function renderSystemDiagramsSection() {
         return `<div class="system-diagram-card">
             <h4>${escapeHtml(d.title || 'Diagram ' + (idx + 1))}</h4>
             <p class="detail-muted">${escapeHtml(d.caption || '')}</p>
-            <pre class="mermaid" id="${safeId}">${mermaidCode}</pre>
+            <pre class="mermaid" id="${safeId}">${escapeHtml(mermaidCode)}</pre>
         </div>`;
     }).filter(Boolean).join('');
     if (!diagramCards) return '';
@@ -3361,18 +3786,11 @@ function renderLastIngressView() {
 }
 
 function renderTasksView() {
-    var root = document.getElementById('view-root');
-    if (!root) return;
-    root.innerHTML = '<section class="section-block"><h3>Zadania</h3><p class="detail-muted">Ładowanie...</p></section>';
-    loadTasksIntoView();
+    renderCasesView();
 }
 
 function loadTasksIntoView() {
-    var root = document.getElementById('view-root');
-    apiFetch(V2_API_BASE, '/tasks', {}).then(function (data) {
-        if (!data || !data.ok) { root.innerHTML = '<p>Błąd: ' + escapeHtml((data && data.error) || 'nieznany') + '</p>'; return; }
-        renderTasksContent(data.tasks || []);
-    }).catch(function (err) { root.innerHTML = '<p>Błąd: ' + escapeHtml(err.message) + '</p>'; });
+    void refreshRegistryViewAfterTaskMutation();
 }
 
 function renderTasksContent(tasks) {
@@ -3382,7 +3800,7 @@ function renderTasksContent(tasks) {
     var uncertain = tasks.filter(function (t) { return t.source_kind === 'agent_uncertain' && t.task_status === 'pending'; });
 
     var html = '<div class="section-block">';
-    html += '<div class="section-header"><div><h3>Zadania</h3><p>Sprawy operacyjne i firmowe — leady HVAC osobno w Biurku.</p></div>';
+    html += '<div class="section-header"><div><h3>Zadania</h3><p>Sprawy firmowe wymagające działania (ZUS, auto, faktury). Leady klientów HVAC są w Biurku i Sprawach.</p></div>';
     html += '<button id="task-new-btn" class="btn btn-primary btn-small">+ Nowe zadanie</button></div>';
 
     html += '<div id="task-new-form" style="display:none; margin:12px 0; padding:12px; border:1px solid #ccc; border-radius:8px;">';
@@ -3416,18 +3834,48 @@ function renderTasksContent(tasks) {
     document.getElementById('task-cancel-btn').addEventListener('click', function () { document.getElementById('task-new-form').style.display = 'none'; });
     document.getElementById('task-create-btn').addEventListener('click', function () { void createManualTask(); });
     document.getElementById('task-archive-load').addEventListener('click', loadArchive);
-    bindTaskButtons();
+    bindTaskButtonsDelegated();
+}
+
+function bindTaskButtonsDelegated() {
+    const root = document.getElementById('view-root');
+    if (!root || root.dataset.taskDelegationBound === '1') {
+        return;
+    }
+    root.dataset.taskDelegationBound = '1';
+    root.addEventListener('click', function (event) {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const confirmBtn = target.closest('.task-confirm');
+        if (confirmBtn) {
+            showTaskFeedback(confirmBtn.dataset.id, 'confirm');
+            return;
+        }
+        const rejectBtn = target.closest('.task-reject');
+        if (rejectBtn) {
+            showTaskFeedback(rejectBtn.dataset.id, 'reject');
+            return;
+        }
+        const doneBtn = target.closest('.task-done');
+        if (doneBtn) {
+            void markTaskDone(doneBtn.dataset.id);
+        }
+    });
 }
 
 function taskCardHtml(task, mode) {
-    var pr = task.priority, pc = pr === 'pilne' ? '#ef4444' : pr === 'normalny' ? '#6b7280' : '#9ca3af';
+    var pr = task.priority;
+    var prClass = pr === 'pilne' ? 'task-priority--urgent' : (pr === 'normalny' ? 'task-priority--normal' : 'task-priority--low');
     var src = task.source_kind === 'agent_confident' ? '🤖 Agent' : task.source_kind === 'agent_uncertain' ? '🤖 Agent (niepewny)' : '👤 Operator';
     var taskId = task.id || task.task_id || task.case_id || '';
-    var html = '<div style="display:flex;align-items:flex-start;gap:8px;padding:10px;margin:6px 0;border-radius:8px;border:1px solid #d1d5db;background:' + (mode === 'pending' ? '#fefce8' : '#fff') + ';">';
-    html += '<span style="color:' + pc + ';font-size:18px;">' + (pr === 'pilne' ? '🔴' : pr === 'normalny' ? '🟡' : '⚪') + '</span>';
-    html += '<div style="flex:1;"><strong>' + escapeHtml(task.task_title || task.case_id) + '</strong>';
-    html += '<div style="font-size:12px;color:#6b7280;">' + src + (task.scheduled_at ? ' · 📅 ' + task.scheduled_at : '') + '</div></div>';
-    html += '<div style="display:flex;gap:4px;flex-shrink:0;">';
+    var modeClass = mode === 'pending' ? 'task-card--pending' : 'task-card--default';
+    var html = '<div class="task-card ' + modeClass + '">';
+    html += '<span class="task-priority-icon ' + prClass + '">' + (pr === 'pilne' ? '🔴' : pr === 'normalny' ? '🟡' : '⚪') + '</span>';
+    html += '<div class="task-card-body"><strong>' + escapeHtml(task.task_title || task.case_id) + '</strong>';
+    html += '<div class="task-card-meta">' + src + (task.scheduled_at ? ' · 📅 ' + escapeHtml(task.scheduled_at) : '') + '</div></div>';
+    html += '<div class="task-card-actions">';
     if (mode === 'pending') { html += '<button class="btn btn-primary btn-small task-confirm" data-id="' + escapeHtml(taskId) + '">Potwierdź</button><button class="btn btn-ghost btn-small task-reject" data-id="' + escapeHtml(taskId) + '">Odrzuć</button>'; }
     else if (mode === 'active') { html += '<button class="btn btn-ghost btn-small task-done" data-id="' + escapeHtml(taskId) + '">Zrobione</button>'; }
     else { html += '<button class="btn btn-ghost btn-small task-done" data-id="' + escapeHtml(taskId) + '">Zrobione</button><button class="btn btn-ghost btn-small task-reject" data-id="' + escapeHtml(taskId) + '">Odrzuć</button>'; }
@@ -3435,16 +3883,14 @@ function taskCardHtml(task, mode) {
 }
 
 function bindTaskButtons() {
-    document.querySelectorAll('.task-confirm').forEach(function (b) { b.addEventListener('click', function () { showTaskFeedback(b.dataset.id, 'confirm'); }); });
-    document.querySelectorAll('.task-reject').forEach(function (b) { b.addEventListener('click', function () { showTaskFeedback(b.dataset.id, 'reject'); }); });
-    document.querySelectorAll('.task-done').forEach(function (b) { b.addEventListener('click', function () { void markTaskDone(b.dataset.id); }); });
+    /* legacy no-op — delegation via bindTaskButtonsDelegated */
 }
 
 function showTaskFeedback(cid, action) {
     var fb = prompt(action === 'confirm' ? 'Potwierdzasz — wiadomość dla agenta (opcjonalnie):' : 'Odrzucasz — wiadomość dla agenta (opcjonalnie):');
     if (fb === null) return;
     apiFetch(V2_API_BASE, '/tasks/' + cid + '/' + (action === 'confirm' ? 'confirm' : 'reject'), { method: 'POST', body: JSON.stringify({ feedback: fb || '' }) })
-        .then(function () { loadTasksIntoView(); })
+        .then(function () { void refreshRegistryViewAfterTaskMutation(); })
         .catch(function (err) { showToast('Nie udalo sie zapisac decyzji: ' + err.message, 'error'); });
 }
 
@@ -3453,8 +3899,10 @@ function loadArchive() {
     apiFetch(V2_API_BASE, '/tasks?archive=true', {}).then(function (data) {
         if (!data || !data.ok) { d.innerHTML = '<p class="detail-muted">Brak archiwum.</p>'; return; }
         var tasks = data.tasks || []; if (!tasks.length) { d.innerHTML = '<p class="detail-muted">Archiwum puste.</p>'; return; }
-        var h = ''; tasks.forEach(function (t) { h += '<div style="padding:8px;border-bottom:1px solid #e5e7eb;">' + escapeHtml(t.task_title || t.case_id) + ' <span style="color:#6b7280;">' + (t.task_status === 'rejected' ? '❌ Odrzucone' : '✅ Zrobione') + ' · ' + (t.updated_at || t.created_at).substring(0, 10) + '</span></div>'; });
+        var h = ''; tasks.forEach(function (t) { h += '<div style="padding:8px;border-bottom:1px solid #e5e7eb;">' + escapeHtml(t.task_title || t.case_id) + ' <span style="color:#6b7280;">' + (t.task_status === 'rejected' ? '❌ Odrzucone' : '✅ Zrobione') + ' · ' + escapeHtml(String(t.updated_at || t.created_at || '').substring(0, 10)) + '</span></div>'; });
         d.innerHTML = h;
+    }).catch(function (err) {
+        d.innerHTML = '<p class="error-inline" role="alert">' + escapeHtml(err && err.message ? err.message : String(err)) + '</p>';
     });
 }
 
@@ -5174,6 +5622,36 @@ async function submitHitlAgentAction(trigger, kind) {
     }
 }
 
+function isMaterializeProposalId(proposalId) {
+    return String(proposalId || '').trim().startsWith('prop_');
+}
+
+function resolveEngagementIdForMaterializeProposal(proposalId) {
+    const fromChat = findEngagementIdForProposal(proposalId);
+    if (fromChat) return fromChat;
+    if (state.detail && state.detail.type === 'case') {
+        const eng = state.detail.engagement;
+        if (eng && eng.engagement_id) return String(eng.engagement_id).trim();
+    }
+    return '';
+}
+
+async function approveProposalViaApi(proposalId, decision, reason) {
+    if (decision === 'approve' && isMaterializeProposalId(proposalId)) {
+        const engagementId = resolveEngagementIdForMaterializeProposal(proposalId);
+        if (engagementId) {
+            return apiFetch(V2_API_BASE, `/engagements/${encodeURIComponent(engagementId)}/materialize/approve`, {
+                method: 'POST',
+                body: JSON.stringify({ proposal_id: proposalId, reason: reason || '' }),
+            });
+        }
+    }
+    return apiFetch(V2_API_BASE, `/action-proposals/${encodeURIComponent(proposalId)}/${decision}`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+    });
+}
+
 async function decideActionProposal(proposalId, decision) {
     if (!canCurrentUserDecideActionProposals()) {
         showError('Tę decyzję może zapisać tylko owner Daszka.');
@@ -5181,11 +5659,10 @@ async function decideActionProposal(proposalId, decision) {
     }
     const reason = window.prompt(decision === 'approve' ? 'Powód zatwierdzenia' : 'Powód odrzucenia', '') || '';
     try {
-        await apiFetch(V2_API_BASE, `/action-proposals/${encodeURIComponent(proposalId)}/${decision}`, {
-            method: 'POST',
-            body: JSON.stringify({ reason }),
-        });
-        showToast('Decyzja została zapisana do kolejki bridge.');
+        await approveProposalViaApi(proposalId, decision, reason);
+        showToast(decision === 'approve' && isMaterializeProposalId(proposalId)
+            ? 'Materialize zatwierdzone — odświeżam widok.'
+            : 'Decyzja została zapisana do kolejki bridge.');
         await loadAllData();
         if (state.detail && state.detail.type === 'case') {
             await openCaseDetail(state.detail.payload.case.case_id);
@@ -5199,13 +5676,9 @@ async function markTaskDone(taskId) {
     try {
         await apiFetch(V2_API_BASE, `/tasks/${taskId}/done`, { method: 'POST' });
         showToast('Zadanie zostało oznaczone jako załatwione.');
-        if (normalizeMainViewId(state.currentView) === 'tasks') {
-            loadTasksIntoView();
-        } else {
-            await loadAllData();
-        }
+        await refreshRegistryViewAfterTaskMutation();
     } catch (error) {
-        showError(error.message);
+        showToast(error.message || 'Nie udało się oznaczyć zadania jako zrobione.', 'error');
     }
 }
 
@@ -5243,11 +5716,7 @@ async function createManualTask(formData) {
             if (scheduledInput) scheduledInput.value = '';
             if (taskForm) taskForm.style.display = 'none';
         }
-        if (normalizeMainViewId(state.currentView) === 'tasks') {
-            loadTasksIntoView();
-        } else {
-            await loadAllData();
-        }
+        await refreshRegistryViewAfterTaskMutation();
     } catch (error) {
         showError(error.message);
     }
@@ -5255,8 +5724,10 @@ async function createManualTask(formData) {
 
 document.addEventListener('DOMContentLoaded', () => {
     installDaszekNavHandlers();
+    bindTaskButtonsDelegated();
 
     initDaszekTheme();
+    enhanceAccessibleTooltips(document.getElementById('app'));
     const backdrop = document.getElementById('detail-panel-backdrop');
     if (backdrop) {
         backdrop.addEventListener('click', () => {
@@ -5295,6 +5766,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (view === 'chat') {
             await startChatViewLoad();
+            return;
+        }
+        if (view === 'identity') {
+            await startIdentityMergeViewLoad();
             return;
         }
         if (view === 'tasks') {
@@ -5654,6 +6129,193 @@ function openDecisionDetail(decisionId) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   Identity Binding View — P2-ID-2 (Poziom 2 suggest + legacy email dupes)
+   ═══════════════════════════════════════════════════════════════════ */
+
+let identityMergeViewRequestId = 0;
+
+function identitySummaryLine(identity) {
+    if (!identity || typeof identity !== 'object') {
+        return '—';
+    }
+    const email = String(identity.primary_email || '').trim();
+    const name = String(identity.display_name || '').trim();
+    const kind = String(identity.identity_kind || '').trim();
+    const parts = [];
+    if (email) parts.push(email);
+    if (name && name.toLowerCase() !== email.toLowerCase()) parts.push(name);
+    if (kind) parts.push(kind);
+    return parts.length ? parts.join(' · ') : '—';
+}
+
+async function startIdentityMergeViewLoad() {
+    const root = document.getElementById('view-root');
+    if (!root) return;
+    const requestId = ++identityMergeViewRequestId;
+    state.data.identityMerge = {
+        ok: false,
+        bindingSuggestions: [],
+        emailDuplicates: [],
+        loadError: null,
+        loading: true,
+    };
+    root.innerHTML = wrapDaszekViewShell(['Tożsamość klientów'], `
+        <section class="detail-section">
+            <p class="detail-muted" role="status">Wczytywanie kolejki sugestii tożsamości…</p>
+        </section>
+    `);
+    try {
+        const [bindingData, emailData] = await Promise.all([
+            apiFetch(V3_API_BASE, '/identity/binding-suggestions?status=pending_operator&limit=50').catch(function () {
+                return { ok: false, items: [] };
+            }),
+            apiFetch(V2_API_BASE, '/identity/suggestions?limit=20').catch(function () {
+                return { ok: false, items: [] };
+            }),
+        ]);
+        if (requestId !== identityMergeViewRequestId || normalizeMainViewId(state.currentView) !== 'identity') return;
+        state.data.identityMerge = {
+            ok: !!(bindingData && bindingData.ok !== false),
+            bindingSuggestions: bindingData && Array.isArray(bindingData.items) ? bindingData.items : [],
+            emailDuplicates: emailData && Array.isArray(emailData.items) ? emailData.items : [],
+            loadError: null,
+            loading: false,
+        };
+    } catch (err) {
+        if (requestId !== identityMergeViewRequestId || normalizeMainViewId(state.currentView) !== 'identity') return;
+        state.data.identityMerge = {
+            ok: false,
+            bindingSuggestions: [],
+            emailDuplicates: [],
+            loadError: String(err.message || err),
+            loading: false,
+        };
+    }
+    if (requestId !== identityMergeViewRequestId || normalizeMainViewId(state.currentView) !== 'identity') return;
+    renderIdentityMergeView();
+}
+
+function renderIdentityBindingSuggestionCard(item) {
+    const suggestionId = String(item.suggestion_id || '');
+    const signalLabel = String(item.signal_label_pl || item.signal_type || 'Sugestia');
+    const confidence = item.confidence != null ? Math.round(Number(item.confidence) * 100) : null;
+    const sourceLine = identitySummaryLine(item.source_identity);
+    const targetLine = identitySummaryLine(item.target_identity);
+    const evidence = item.evidence_json && typeof item.evidence_json === 'object' ? item.evidence_json : {};
+    const evidenceBits = [];
+    if (evidence.nip) evidenceBits.push('NIP: ' + String(evidence.nip));
+    if (evidence.phone) evidenceBits.push('Tel: ' + String(evidence.phone));
+    if (evidence.display_a && evidence.display_b) {
+        evidenceBits.push(String(evidence.display_a) + ' ↔ ' + String(evidence.display_b));
+    }
+    return `<article class="identity-binding-card decision-card" data-suggestion-id="${escapeHtml(suggestionId)}">
+        <div class="identity-merge-head">
+            <h4>${escapeHtml(signalLabel)}</h4>
+            ${confidence != null ? `<span class="record-badge">${escapeHtml(String(confidence))}% pewności</span>` : ''}
+        </div>
+        <div class="os-event-detail-grid">
+            <div><span class="detail-muted">Źródło</span><strong>${escapeHtml(sourceLine)}</strong></div>
+            <div><span class="detail-muted">Cel scalenia</span><strong>${escapeHtml(targetLine)}</strong></div>
+        </div>
+        ${evidenceBits.length ? `<p class="detail-muted">Dowód: ${escapeHtml(evidenceBits.join(' · '))}</p>` : ''}
+        <div class="decision-card-actions">
+            <button type="button" class="btn btn-primary btn-small" data-identity-binding-approve="${escapeHtml(suggestionId)}" data-tooltip="Zatwierdź scalenie tożsamości">Zatwierdź</button>
+            <button type="button" class="btn btn-secondary btn-small" data-identity-binding-reject="${escapeHtml(suggestionId)}" data-tooltip="Odrzuć sugestię — bez scalenia">Odrzuć</button>
+        </div>
+    </article>`;
+}
+
+function renderIdentityEmailDuplicateCard(item, idx) {
+    const email = String(item.email_norm || item.email || item.customer_email || '').trim();
+    const identityIds = Array.isArray(item.identity_ids) ? item.identity_ids : [];
+    const count = item.identity_count != null ? Number(item.identity_count) : identityIds.length;
+    return `<article class="identity-merge-card" id="identity-card-${idx}" data-identity-email="${escapeHtml(email)}">
+        <div class="identity-merge-head">
+            <h4>${escapeHtml(email || '—')}</h4>
+            <span class="record-badge">${escapeHtml(String(count || '?'))} tożsamości</span>
+        </div>
+        <p class="detail-muted">Duplikat e-mail — wymaga reconcile po stronie Node B (P1).</p>
+        ${identityIds.length ? `<p class="detail-muted">ID: ${identityIds.map(function (id) { return escapeHtml(String(id)); }).join(', ')}</p>` : ''}
+    </article>`;
+}
+
+function renderIdentityMergeView() {
+    const root = document.getElementById('view-root');
+    if (!root) return;
+    const bundle = state.data.identityMerge || {};
+    if (bundle.loading) return;
+    if (bundle.loadError) {
+        root.innerHTML = wrapDaszekViewShell(['Tożsamość klientów'], `
+            <section class="empty-state ds-state ds-state--error">
+                <h3>Błąd wczytywania</h3>
+                <p class="error-inline">${escapeHtml(bundle.loadError)}</p>
+            </section>
+        `);
+        return;
+    }
+    const bindingSuggestions = Array.isArray(bundle.bindingSuggestions) ? bundle.bindingSuggestions : [];
+    const emailDuplicates = Array.isArray(bundle.emailDuplicates) ? bundle.emailDuplicates : [];
+    const bindingCards = bindingSuggestions.map(renderIdentityBindingSuggestionCard).join('');
+    const emailCards = emailDuplicates.map(renderIdentityEmailDuplicateCard).join('');
+    const bindingSection = bindingSuggestions.length
+        ? `<div class="identity-merge-grid">${bindingCards}</div>`
+        : `<section class="empty-state ds-state"><p>Brak oczekujących sugestii wiązania. Uruchom skan, jeśli spodziewasz się dopasowań NIP/telefon/nazwa.</p></section>`;
+    const emailSection = emailDuplicates.length
+        ? `<section class="identity-merge-section identity-merge-section--legacy"><h3 class="detail-section-title">Pozostałe duplikaty e-mail</h3><div class="identity-merge-grid">${emailCards}</div></section>`
+        : '';
+    root.innerHTML = wrapDaszekViewShell(['Tożsamość klientów'], `
+        <section class="identity-merge-section">
+            <div class="detail-section-actions" style="margin-bottom: 1rem;">
+                <button type="button" class="btn btn-secondary btn-small" data-identity-binding-scan data-tooltip="Przeskanuj rejestr tożsamości pod kątem NIP/telefon/nazwa">Skanuj sugestie</button>
+            </div>
+            <p class="detail-muted">Poziom 2 (RFC): sugestie scalenia różnych e-maili z tym samym sygnałem — wymagają Twojej decyzji.</p>
+            ${bindingSection}
+        </section>
+        ${emailSection}
+    `);
+    enhanceAccessibleTooltips(root);
+}
+
+async function scanIdentityBindingSuggestions(trigger) {
+    if (trigger) trigger.disabled = true;
+    try {
+        const result = await apiFetch(V3_API_BASE, '/identity/binding-suggestions/scan?limit=50', { method: 'POST' });
+        const detected = result && result.detected != null ? Number(result.detected) : 0;
+        showToast('Skan zakończony — wykryto ' + detected + ' sugestii.', 'success');
+        void startIdentityMergeViewLoad();
+    } catch (err) {
+        showToast(err && err.message ? err.message : 'Skan sugestii nie powiódł się.', 'error');
+        if (trigger) trigger.disabled = false;
+    }
+}
+
+async function decideIdentityBindingSuggestion(suggestionId, status) {
+    const sid = String(suggestionId || '').trim();
+    if (!sid) return;
+    const label = status === 'approved' ? 'zatwierdzić' : 'odrzucić';
+    if (!window.confirm('Czy na pewno chcesz ' + label + ' tę sugestię scalenia tożsamości?')) {
+        return;
+    }
+    try {
+        const result = await apiFetch(V3_API_BASE, '/identity/binding-suggestions/' + encodeURIComponent(sid) + '/status', {
+            method: 'POST',
+            body: JSON.stringify({ status: status, reviewed_by: 'operator' }),
+        });
+        if (!result || result.ok === false) {
+            throw new Error((result && result.detail) || (result && result.message) || 'Operacja nie powiodła się.');
+        }
+        if (status === 'approved' && result.merge && result.merge.merged) {
+            showToast('Tożsamości scalone — odświeżam kolejkę.', 'success');
+        } else {
+            showToast(status === 'approved' ? 'Sugestia zatwierdzona.' : 'Sugestia odrzucona.', 'success');
+        }
+        void startIdentityMergeViewLoad();
+    } catch (err) {
+        showToast(err && err.message ? err.message : 'Błąd operacji na sugestii.', 'error');
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    Constitution View — P2
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -5781,7 +6443,10 @@ var ONBOARDING_STEPS = [
     { title: 'Daszek gotowy!', icon: '&#10004;&#65039;', text: 'Biurko czeka. Zaczynaj prace — wszystko, co wazne, juz na Ciebie czeka.' },
 ];
 
+var onboardingReturnFocus = null;
+
 function showOnboardingWizard() {
+    onboardingReturnFocus = document.activeElement;
     var backdrop = document.createElement('div');
     backdrop.className = 'onboarding-backdrop';
     backdrop.id = 'onboarding-backdrop';
@@ -5795,21 +6460,61 @@ function showOnboardingWizard() {
     overlay.setAttribute('aria-labelledby', 'onboarding-title');
     overlay.innerHTML = renderOnboardingStep(0);
     document.body.appendChild(overlay);
+    bindOnboardingFocusTrap(overlay);
     var firstFocus = overlay.querySelector('button');
     if (firstFocus) {
         firstFocus.focus();
     }
+    overlay.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            completeOnboarding();
+        }
+    });
 
     void overlay.offsetWidth; // force reflow for animation
     backdrop.classList.add('onboarding-backdrop--visible');
     overlay.classList.add('onboarding-overlay--visible');
 }
 
+function bindOnboardingFocusTrap(overlay) {
+    if (!overlay || overlay.dataset.focusTrapBound === '1') return;
+    overlay.dataset.focusTrapBound = '1';
+    overlay.addEventListener('keydown', function (e) {
+        if (e.key !== 'Tab') return;
+        var focusable = overlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (!focusable.length) return;
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    });
+}
+
+function enhanceAccessibleTooltips(root) {
+    var scope = root || document;
+    scope.querySelectorAll('[data-tooltip]').forEach(function (el) {
+        var tip = el.getAttribute('data-tooltip') || '';
+        if (tip && !el.getAttribute('aria-label')) {
+            el.setAttribute('aria-label', tip);
+        }
+        if (el.tagName !== 'BUTTON' && el.tagName !== 'A' && el.getAttribute('role') !== 'button' && !el.hasAttribute('tabindex')) {
+            el.setAttribute('tabindex', '0');
+        }
+    });
+}
+
 function renderOnboardingStep(stepIdx) {
     var step = ONBOARDING_STEPS[stepIdx];
     if (!step) return '';
     var dots = ONBOARDING_STEPS.map(function (_, i) {
-        return '<span class="onboarding-step-dot' + (i === stepIdx ? ' onboarding-step-dot--active' : '') + (i < stepIdx ? ' onboarding-step-dot--done' : '') + '"></span>';
+        var current = i === stepIdx ? ' aria-current="step"' : '';
+        return '<span class="onboarding-step-dot' + (i === stepIdx ? ' onboarding-step-dot--active' : '') + (i < stepIdx ? ' onboarding-step-dot--done' : '') + '"' + current + ' aria-label="Krok ' + (i + 1) + ' z ' + ONBOARDING_STEPS.length + '"></span>';
     }).join('');
     var isLast = stepIdx === ONBOARDING_STEPS.length - 1;
     var buttons = isLast
@@ -5819,7 +6524,7 @@ function renderOnboardingStep(stepIdx) {
         '<div class="onboarding-icon">' + step.icon + '</div>' +
         '<h2 id="onboarding-title">' + escapeHtml(step.title) + '</h2>' +
         '<p>' + escapeHtml(step.text) + '</p>' +
-        '<div class="onboarding-dots">' + dots + '</div>' +
+        '<div class="onboarding-dots" role="progressbar" aria-valuemin="1" aria-valuemax="' + ONBOARDING_STEPS.length + '" aria-valuenow="' + (stepIdx + 1) + '" aria-label="Postęp wprowadzenia">' + dots + '</div>' +
         '<div class="onboarding-actions">' + buttons + '</div>' +
         '</div>';
 }
@@ -5833,6 +6538,7 @@ function advanceOnboarding(currentStep) {
     var overlay = document.getElementById('onboarding-overlay');
     if (!overlay) return;
     overlay.innerHTML = renderOnboardingStep(nextStep);
+    bindOnboardingFocusTrap(overlay);
     var focusBtn = overlay.querySelector('button');
     if (focusBtn) {
         focusBtn.focus();
@@ -5851,6 +6557,10 @@ function completeOnboarding() {
         backdrop.classList.remove('onboarding-backdrop--visible');
         setTimeout(function () { if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop); }, 300);
     }
+    if (onboardingReturnFocus && typeof onboardingReturnFocus.focus === 'function') {
+        try { onboardingReturnFocus.focus(); } catch (_) { /* ignore */ }
+    }
+    onboardingReturnFocus = null;
     showToast('Daszek gotowy do pracy', 'success');
 }
 
@@ -5866,6 +6576,8 @@ function completeOnboarding() {
 const chatMessageActions = {
     copy: { render: renderChatCopyButton, position: 'after' },
     feedback: { render: renderChatFeedbackButtons, position: 'after' },
+    regenerate: { render: renderChatRegenerateButton, position: 'after' },
+    variants: { render: renderChatVariantSelector, position: 'footer' },
 };
 
 /* ── Session ID ─────────────────────────────────────────────────── */
@@ -6087,9 +6799,70 @@ function renderChatShell() {
 
     // Bind events
     bindChatEvents();
+    populateChatCaseSelect();
 
     // Scroll to bottom after render
     setTimeout(scrollChatToBottom, 50);
+}
+
+function populateChatCaseSelect() {
+    var select = document.getElementById('chat-case-select');
+    if (!select) return;
+    var feed = getOperationalFeed();
+    var caseMap = {};
+    if (feed && Array.isArray(feed.cases)) {
+        feed.cases.forEach(function (c) {
+            var id = String(c.case_id || c.id || '').trim();
+            if (!id) return;
+            caseMap[id] = c;
+        });
+    }
+    if (feed) {
+        iterOperationalFeedDeskLikeItems(feed).forEach(function (row) {
+            var id = String(row.case_id || '').trim();
+            if (!id || caseMap[id]) return;
+            caseMap[id] = {
+                case_id: id,
+                title: row.title || row.subject || row.note_title || '',
+                subject: row.subject || '',
+                status: row.status || row.desk_status || '',
+            };
+        });
+    }
+    var cases = Object.keys(caseMap).map(function (id) { return caseMap[id]; });
+    cases.sort(function (a, b) {
+        return String(a.title || a.subject || a.case_id || '').localeCompare(String(b.title || b.subject || b.case_id || ''), 'pl');
+    });
+    var stored = '';
+    try { stored = localStorage.getItem('daszek-chat-case-id') || ''; } catch (_) { stored = ''; }
+    var selected = state.agentChat.currentCaseId || stored || '';
+    if (selected && !caseMap[selected]) {
+        selected = '';
+        state.agentChat.currentCaseId = '';
+        try { localStorage.removeItem('daszek-chat-case-id'); } catch (_) { /* ignore */ }
+    } else if (selected) {
+        state.agentChat.currentCaseId = selected;
+    }
+    var html = '<option value="">Ogolny (bez sprawy)</option>';
+    cases.slice(0, 50).forEach(function (c) {
+        var id = String(c.case_id || c.id || '').trim();
+        if (!id) return;
+        var labelBase = String(c.title || c.subject || id).slice(0, 48);
+        var status = String(c.status || c.case_status || '').trim();
+        var label = status ? (labelBase + ' [' + status + ']') : labelBase;
+        html += '<option value="' + escapeHtml(id) + '"' + (id === selected ? ' selected' : '') + '>' + escapeHtml(label) + '</option>';
+    });
+    select.innerHTML = html;
+    select.onchange = function () {
+        state.agentChat.currentCaseId = select.value || '';
+        try {
+            if (state.agentChat.currentCaseId) {
+                localStorage.setItem('daszek-chat-case-id', state.agentChat.currentCaseId);
+            } else {
+                localStorage.removeItem('daszek-chat-case-id');
+            }
+        } catch (_) { /* ignore */ }
+    };
 }
 
 /* ── Render suggestions chips (teaching empty state) ────────────── */
@@ -6167,14 +6940,23 @@ function renderChatMessageActions(msg) {
     var actionKeys = Object.keys(chatMessageActions);
     if (actionKeys.length === 0 || msg.role !== 'agent' || msg._streaming) return '';
 
-    var buttons = actionKeys.map(function (key) {
+    var afterButtons = actionKeys.map(function (key) {
         var action = chatMessageActions[key];
-        if (action.position === 'footer') return '';
+        if (action.position !== 'after') return '';
         return action.render(msg);
     }).filter(Boolean).join('');
 
-    if (!buttons) return '';
-    return '<div class="chat-message-actions">' + buttons + '</div>';
+    var footerItems = actionKeys.map(function (key) {
+        var action = chatMessageActions[key];
+        if (action.position !== 'footer') return '';
+        return action.render(msg);
+    }).filter(Boolean).join('');
+
+    if (!afterButtons && !footerItems) return '';
+    var html = '';
+    if (afterButtons) html += '<div class="chat-message-actions">' + afterButtons + '</div>';
+    if (footerItems) html += '<div class="chat-message-footer">' + footerItems + '</div>';
+    return html;
 }
 
 /* ── Feedback buttons ────────────────────────────────────────────── */
@@ -6188,8 +6970,68 @@ function renderChatFeedbackButtons(msg) {
 
 /* ── Copy button (premium UX) ─────────────────────────────────────── */
 function renderChatCopyButton(msg) {
-    return '<button class="chat-action-btn" data-action="copy-message" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-tooltip="Kopiuj tresc">' +
+    return '<button class="chat-action-btn" data-action="copy-message" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-tooltip="Kopiuj tresc" aria-label="Kopiuj tresc">' +
         '<span class="chat-action-icon">&#128203;</span> Kopiuj</button>';
+}
+
+function renderChatRegenerateButton(msg) {
+    return '<button class="chat-action-btn" data-action="regenerate-message" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-tooltip="Wygeneruj ponownie" aria-label="Wygeneruj ponownie"><span class="chat-action-icon">&#8635;</span></button>';
+}
+
+function renderChatVariantSelector(msg) {
+    return '<div class="chat-variant-picker" role="group" aria-label="Warianty odpowiedzi">' +
+        '<button type="button" class="chat-action-btn chat-variant-btn" data-action="variant-tone" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-variant="krotko" data-tooltip="Wersja krotsza" aria-label="Wersja krotsza">Krocej</button>' +
+        '<button type="button" class="chat-action-btn chat-variant-btn" data-action="variant-tone" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-variant="szczegolowo" data-tooltip="Wersja szczegolowa" aria-label="Wersja szczegolowa">Szczegolowo</button>' +
+        '<button type="button" class="chat-action-btn chat-variant-btn" data-action="variant-tone" data-turn-id="' + escapeHtml(msg.turnId || '') + '" data-variant="formalnie" data-tooltip="Ton formalny" aria-label="Ton formalny">Formalnie</button>' +
+        '</div>';
+}
+
+function findPrecedingUserMessage(agentTurnId) {
+    var msgs = state.agentChat.messages;
+    var idx = -1;
+    for (var i = 0; i < msgs.length; i++) {
+        if (msgs[i].turnId === agentTurnId) { idx = i; break; }
+    }
+    if (idx <= 0) return null;
+    for (var j = idx - 1; j >= 0; j--) {
+        if (msgs[j].role === 'user') return msgs[j];
+    }
+    return null;
+}
+
+function removeChatMessageFromDom(turnId) {
+    var container = document.getElementById('chat-messages');
+    if (!container) return;
+    var el = container.querySelector('[data-turn-id="' + turnId + '"]');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function chatRegenerateResponse(agentTurnId) {
+    var userMsg = findPrecedingUserMessage(agentTurnId);
+    if (!userMsg || !userMsg.content) {
+        showToast('Brak poprzedniej wiadomosci uzytkownika.', 'error');
+        return;
+    }
+    removeChatMessageFromDom(agentTurnId);
+    state.agentChat.messages = state.agentChat.messages.filter(function (m) { return m.turnId !== agentTurnId; });
+    sendChatMessage(userMsg.content);
+}
+
+function chatApplyVariant(agentTurnId, variant) {
+    var userMsg = findPrecedingUserMessage(agentTurnId);
+    if (!userMsg || !userMsg.content) {
+        showToast('Brak poprzedniej wiadomosci uzytkownika.', 'error');
+        return;
+    }
+    var prompts = {
+        krotko: 'Odpowiedz krocej i bardziej zwiezle na: ' + userMsg.content,
+        szczegolowo: 'Odpowiedz szczegolowo, z kontekstem sprawy, na: ' + userMsg.content,
+        formalnie: 'Odpowiedz formalnym tonem biznesowym na: ' + userMsg.content,
+    };
+    var prompt = prompts[variant] || userMsg.content;
+    removeChatMessageFromDom(agentTurnId);
+    state.agentChat.messages = state.agentChat.messages.filter(function (m) { return m.turnId !== agentTurnId; });
+    sendChatMessage(prompt);
 }
 
 function chatCopyMessage(turnId) {
@@ -6272,6 +7114,16 @@ function bindChatEvents() {
         var copyBtn = t.closest('[data-action="copy-message"]');
         if (copyBtn) { e.preventDefault(); chatCopyMessage(copyBtn.getAttribute('data-turn-id') || ''); return; }
 
+        var regenBtn = t.closest('[data-action="regenerate-message"]');
+        if (regenBtn) { e.preventDefault(); chatRegenerateResponse(regenBtn.getAttribute('data-turn-id') || ''); return; }
+
+        var variantBtn = t.closest('[data-action="variant-tone"]');
+        if (variantBtn) {
+            e.preventDefault();
+            chatApplyVariant(variantBtn.getAttribute('data-turn-id') || '', variantBtn.getAttribute('data-variant') || '');
+            return;
+        }
+
         var scrollHint = t.closest('[data-action="scroll-down"]');
         if (scrollHint) { e.preventDefault(); scrollChatToBottomSmooth(); return; }
     });
@@ -6299,6 +7151,7 @@ function bindChatEvents() {
             }
         });
     }
+    enhanceAccessibleTooltips(shell);
 }
 
 /* ── Handle send: route to brief or message ──────────────────────── */
@@ -6750,10 +7603,7 @@ function chatApproveProposal(btn, proposalId) {
     btn.classList.remove('chat-proposal-btn--approve');
     chatLog('proposal_approve_start', { proposalId: proposalId });
 
-    apiFetch(V2_API_BASE, '/action-proposals/' + encodeURIComponent(proposalId) + '/approve', {
-        method: 'POST',
-        body: JSON.stringify({ reason: 'Zatwierdzone z czatu agenta.' }),
-    })
+    approveProposalViaApi(proposalId, 'approve', 'Zatwierdzone z czatu agenta.')
         .then(function () {
             btn.textContent = 'Zatwierdzono';
             btn.style.borderColor = '#4caf50';

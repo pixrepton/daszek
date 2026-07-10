@@ -22,6 +22,7 @@ require_once DASZEK_PLUGIN_DIR . 'includes/store-v3.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/cycles.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/api.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/api-v2.php';
+require_once DASZEK_PLUGIN_DIR . 'includes/api-v3.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/cron.php';
 require_once DASZEK_PLUGIN_DIR . 'includes/proxy-agent-chat.php';
 

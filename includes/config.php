@@ -33,6 +33,8 @@ function daszek_get_config() {
         // When true, POST operational feed snapshot fails if feed.desk references unknown note_id in v2 desk_notes.
         'operational_feed' => [
             'strict_desk_note_refs' => false,
+            // Keep only the newest N full feed snapshots on disk (worker heartbeat can append frequently).
+            'snapshot_retention' => 40,
         ],
         // Optional thin proxy target for read-only Skrzat requests. Keep Node B
         // as semantic owner; WordPress only forwards authenticated operator asks.

@@ -3,7 +3,7 @@
 **Status:** jedyny kanoniczny dokument Daszek (2026-06-01)
 **Kanoniczny kod wtyczki:** [`daszek/`](daszek/) (nie `gmail-agent/Daszek/` — usunięte)
 
-Wszystkie wcześniejsze pliki `DASZEK_*.md`, `daszek/*.md` (w tym `AGENTS.md`, `CHANGELOG.md`, `fixtures/v3/README.md`) zostały **scalone tutaj i usunięte**. Przy zmianach edytuj **wyłącznie** ten plik (+ kod). Proof z datami: [`gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md`](gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md).
+Wszystkie wcześniejsze pliki `DASZEK_*.md`, `daszek/*.md` (w tym `AGENTS.md`, `CHANGELOG.md`, `fixtures/v3/README.md`) zostały **scalone tutaj i usunięte**. Przy zmianach edytuj **ten plik** + [`docs/core/PROJECT_README.md`](docs/core/PROJECT_README.md) (+ kod). Proof z datami: [`gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md`](gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md).
 
 ---
 
@@ -53,14 +53,14 @@ Powiązane normy: [`gmail-agent/docs/core/CONTEXT_PROJECTION_KNOWLEDGE_GRAPH.md`
 
 ## 2. Jedność PRO — jeden panel operatorski
 
-Operator widzi **jeden produkt**: panel Daszek PRO (plugin **1.3.3**), nie „V3 obok V2”.
+Operator widzi **jeden produkt**: panel Daszek PRO (plugin **1.3.4**), nie „V3 obok V2”.
 
-| Warstwa widoczna                   | Źródło danych                                                                        |
-| ---------------------------------- | ------------------------------------------------------------------------------------ |
-| **Biurko, Sprawy, Dzień, Zadania** | Migawka `daszek_operational_feed_snapshot` (`feed.*`, `feed.case_details`)           |
-| **Archiwum**                       | Overlay Node A (`operator_case_archive.json`) — ukrywa listy, nie kasuje Postgres    |
-| **Szczegół sprawy**                | Najpierw `case_details` z feedu; przy braku — degradacja GET `/daszek/v2/cases/{id}` |
-| **V2 pod spodem**                  | `desk_notes.json`, `bridge-queue`, ID kartek — **infrastruktura**, nie drugi panel   |
+| Warstwa widoczna          | Źródło danych                                                                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Biurko, Sprawy, Dzień** | Migawka `daszek_operational_feed_snapshot` (`feed.desk`, `feed.action_items`, `feed.case_details`); **Sprawy** dodatkowo z `GET /mailbox-cases` (pełna lista Node B) |
+| **Archiwum**              | Overlay Node A (`operator_case_archive.json`) — ukrywa listy, nie kasuje Postgres                                                                                    |
+| **Szczegół sprawy**       | Najpierw `case_details` z feedu; przy braku — degradacja GET `/daszek/v2/cases/{id}`                                                                                 |
+| **V2 pod spodem**         | `desk_notes.json`, `bridge-queue`, ID kartek — **infrastruktura**, nie drugi panel                                                                                   |
 
 Docelowy stan operacyjny: **zawsze świeży operational feed** z Node B. Etykieta „Warstwa v2 (legacy)” na liście Spraw to **stan błędu zasilenia**, nie docelowy tryb pracy.
 
@@ -255,16 +255,16 @@ Rzadkie widoki: **Więcej ▾** (Cockpit, Jakość AI, kohorty, …).
 
 ### Widoki i intencje
 
-| Widok           | Intencja                                             | Dane                                             |
-| --------------- | ---------------------------------------------------- | ------------------------------------------------ |
-| Biurko          | Co dziś wymaga uwagi                                 | `feed.desk`                                      |
-| Dzień           | Plan dnia / fallback                                 | `feed.day`                                       |
-| Sprawy          | Przegląd + szczegół                                  | `feed.cases`, `feed.case_details`                |
-| Zadania         | Next actions                                         | `feed.tasks`                                     |
-| Archiwum        | Sprawy ukryte (overlay A)                            | REST v2 case-archive                             |
-| Ostatni ingress | Bounded ingress (osobny kontekst)                    | `ingress-quality-snapshots`                      |
-| **System**      | Podgląd OS: komponenty, alerty, oś zdarzeń, diagramy | `GET /system/os-events/recent`, health snapshots |
-| Kohorty         | Uruchomienia testów                                  | `/daszek/v3/cohort-runs`                         |
+| Widok                | Intencja                                             | Dane                                             |
+| -------------------- | ---------------------------------------------------- | ------------------------------------------------ |
+| Biurko               | Co dziś wymaga uwagi                                 | `feed.desk`                                      |
+| Dzień                | Plan dnia / fallback                                 | `feed.day`                                       |
+| Sprawy               | Przegląd + szczegół (pełna lista Node B)             | `GET /mailbox-cases` + `feed.case_details`       |
+| Sugerowane działania | Propozycje agenta na Biurku                          | `feed.action_items` (schema 1.3)                 |
+| Archiwum             | Sprawy ukryte (overlay A)                            | REST v2 case-archive                             |
+| Ostatni ingress      | Bounded ingress (osobny kontekst)                    | `ingress-quality-snapshots`                      |
+| **System**           | Podgląd OS: komponenty, alerty, oś zdarzeń, diagramy | `GET /system/os-events/recent`, health snapshots |
+| Kohorty              | Uruchomienia testów                                  | `/daszek/v3/cohort-runs`                         |
 
 **Nie mieszać** na jednym ekranie listowym: operational feed vs ingress quality.
 
@@ -848,7 +848,9 @@ bash /opt/gmail-agent/current/deploy/p2-nodeb-proof-bundle.sh
 | `public/app.js`                            | UI PRO                                                  |
 | `public/system-diagrams-manifest.js`       | Generowany z `knowledge/docs/daszek-system-diagrams.md` |
 | `scripts/sync_system_diagrams_manifest.py` | Sync diagramów MD → manifest.js                         |
-| `includes/api-v2.php`                      | REST v2/v3, walidacja feed, proxy                       |
+| `includes/api-v2.php`                      | REST v2/v3 route registration, proxy                    |
+| `includes/api-v3-handlers.php`             | Walidacja operational feed, materialize/HITL            |
+| `includes/proxy-agent-chat.php`            | Agent chat v3 (CSRF)                                    |
 | `includes/store-v3.php`                    | Migawki operational feed                                |
 | `includes/store-v2*.php`                   | Desk, cases, bridge, archiwum                           |
 | `fixtures/v3/*.json`                       | Testy / podgląd UI                                      |

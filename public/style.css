@@ -27,6 +27,13 @@
     --font-sm: 11px;
     --font-md: 12px;
     --font-lg: 14px;
+    --danger: #d32f2f;
+    --danger-soft: rgba(211, 47, 47, 0.12);
+    --success: #1b5e20;
+    --success-soft: #e8f5e9;
+    --scrim: rgba(15, 18, 24, 0.55);
+    --toast-success-bg: #1b5e20;
+    --toast-error-bg: #b71c1c;
 }
 
 :root[data-theme="dark"] {
@@ -47,6 +54,13 @@
     --surface-raised: var(--paper-strong);
     --border-subtle: var(--line);
     --text-muted: var(--muted);
+    --danger: #f48771;
+    --danger-soft: rgba(244, 135, 113, 0.18);
+    --success: #89d185;
+    --success-soft: #2d4a2f;
+    --scrim: rgba(0, 0, 0, 0.65);
+    --toast-success-bg: #2d6a2e;
+    --toast-error-bg: #8b2f2f;
 }
 
 * {
@@ -3269,6 +3283,11 @@ pre.mermaid svg {
     transition: opacity 0.2s ease 0.4s, transform 0.2s ease 0.4s;
 }
 
+[data-tooltip]:focus {
+    outline: 2px solid var(--accent, #2563eb);
+    outline-offset: 2px;
+}
+
 :root[data-theme="dark"] [data-tooltip]::after {
     background: var(--line);
     color: var(--ink);
@@ -3308,7 +3327,11 @@ pre.mermaid svg {
 }
 
 .decision-card--critical {
-    border-left: 3px solid #d32f2f;
+    border-left: 3px solid var(--danger);
+}
+
+:root[data-theme="dark"] .decision-card--critical {
+    border-left-color: var(--danger);
 }
 
 .decision-card-header {
@@ -3437,14 +3460,24 @@ pre.mermaid svg {
 
 .tool-badge--forbidden {
     background: var(--signal-alarm);
-    color: #d32f2f;
-    border-color: rgba(211, 47, 47, 0.25);
+    color: var(--danger);
+    border-color: var(--danger-soft);
 }
 
 .tool-badge--rag {
-    background: #e8f5e9;
-    color: #1b5e20;
-    border-color: #a5d6a7;
+    background: var(--success-soft);
+    color: var(--success);
+    border-color: var(--line);
+}
+
+:root[data-theme="dark"] .tool-badge--forbidden {
+    color: var(--danger);
+    border-color: var(--danger-soft);
+}
+
+:root[data-theme="dark"] .tool-badge--rag {
+    background: var(--success-soft);
+    color: var(--success);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -3498,7 +3531,7 @@ pre.mermaid svg {
 }
 
 .onboarding-backdrop--visible {
-    background: rgba(15, 18, 24, 0.4);
+    background: var(--scrim);
     pointer-events: auto;
 }
 
@@ -3654,12 +3687,12 @@ body.detail-panel--open .detail-panel {
    ═══════════════════════════════════════════════════════════════════ */
 
 .toast--success {
-    background: #1b5e20;
+    background: var(--toast-success-bg);
     color: #fff;
 }
 
 .toast--error {
-    background: #b71c1c;
+    background: var(--toast-error-bg);
     color: #fff;
 }
 
@@ -3688,4 +3721,144 @@ body.detail-panel--open .detail-panel {
 
 .badge-pulse {
     animation: badgePulse 2s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   System observability dashboard — P2-21
+   ═══════════════════════════════════════════════════════════════════ */
+
+.system-obs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--ds-space-3, var(--space-3));
+    margin-top: var(--ds-space-3, var(--space-3));
+}
+
+.system-obs-card {
+    padding: var(--ds-space-3, var(--space-3));
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--paper);
+}
+
+.system-obs-card.is-ok {
+    border-color: var(--ok, #16a34a);
+}
+
+.system-obs-card.is-warning {
+    border-color: var(--warning, #ca8a04);
+}
+
+.system-obs-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0.25rem 0;
+}
+
+.task-card {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: 10px;
+    margin: 6px 0;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--line);
+    background: var(--paper-strong);
+}
+
+.task-card--pending {
+    background: var(--warm);
+}
+
+.task-card-body {
+    flex: 1;
+}
+
+.task-card-meta {
+    font-size: var(--font-sm);
+    color: var(--muted);
+}
+
+.task-card-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.task-priority-icon.task-priority--urgent {
+    color: var(--danger);
+}
+
+.task-priority-icon.task-priority--normal {
+    color: var(--muted);
+}
+
+.task-priority-icon.task-priority--low {
+    color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Identity merge UI — P3-24
+   ═══════════════════════════════════════════════════════════════════ */
+
+.identity-merge-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: var(--ds-space-3, var(--space-3));
+}
+
+.identity-merge-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ds-space-2, var(--space-2));
+    padding: var(--ds-space-4, var(--space-4));
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--paper);
+}
+
+.identity-merge-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ds-space-2, var(--space-2));
+}
+
+.identity-merge-fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ds-space-2, var(--space-2));
+}
+
+.identity-merge-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: var(--font-sm);
+}
+
+.identity-merge-input {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--paper-strong, var(--paper));
+    color: var(--ink);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Chat variants — P2-14
+   ═══════════════════════════════════════════════════════════════════ */
+
+.chat-message-footer {
+    margin-top: var(--ds-space-2, var(--space-2));
+}
+
+.chat-variant-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.chat-variant-btn {
+    font-size: var(--font-sm);
 }

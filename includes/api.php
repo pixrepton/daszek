@@ -31,6 +31,23 @@ function daszek_api_register_routes() {
         'callback' => 'daszek_api_me',
         'permission_callback' => 'daszek_check_auth',
     ]);
+
+    // Legacy v1 tasks seam — worker + DaszekClient still call /v1/tasks (list shape).
+    register_rest_route($namespace, '/tasks', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v1_tasks_list_compat',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+    register_rest_route($namespace, '/tasks', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v1_tasks_create_compat',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+    register_rest_route($namespace, '/tasks/(?P<id>[a-zA-Z0-9_:-]+)/done', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v1_tasks_done_compat',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
 }
 
 function daszek_api_login(WP_REST_Request $request) {
@@ -53,6 +70,10 @@ function daszek_api_login(WP_REST_Request $request) {
 }
 
 function daszek_api_logout(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
     daszek_logout();
     return ['ok' => true];
 }
@@ -75,6 +96,42 @@ function daszek_api_me(WP_REST_Request $request) {
         'role' => $role,
         'csrf_token' => daszek_generate_csrf_token(),
     ];
+}
+
+function daszek_api_v1_tasks_list_compat(WP_REST_Request $request) {
+    if (function_exists('daszek_api_v2_tasks_list')) {
+        $result = daszek_api_v2_tasks_list($request);
+        if (is_wp_error($result)) {
+            return $result;
+        }
+        if (is_array($result) && isset($result['tasks']) && is_array($result['tasks'])) {
+            return $result['tasks'];
+        }
+        return is_array($result) ? $result : [];
+    }
+    return daszek_api_get_tasks($request);
+}
+
+function daszek_api_v1_tasks_create_compat(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    if (function_exists('daszek_api_v2_tasks_create')) {
+        return daszek_api_v2_tasks_create($request);
+    }
+    return daszek_api_create_task($request);
+}
+
+function daszek_api_v1_tasks_done_compat(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    if (function_exists('daszek_api_v2_tasks_done')) {
+        return daszek_api_v2_tasks_done($request);
+    }
+    return new WP_Error('not_implemented', 'Brak proxy v2 dla tasks/done.', ['status' => 503]);
 }
 
 function daszek_api_get_tasks(WP_REST_Request $request) {

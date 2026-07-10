@@ -1,0 +1,573 @@
+{
+    "generated_at": "2026-07-07T19:58:10+00:00",
+    "route_count": 81,
+    "routes": [
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/csrf",
+            "methods": "GET",
+            "callback": "daszek_api_csrf"
+        },
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/login",
+            "methods": "POST",
+            "callback": "daszek_api_login"
+        },
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/logout",
+            "methods": "POST",
+            "callback": "daszek_api_logout"
+        },
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/me",
+            "methods": "GET",
+            "callback": "daszek_api_me"
+        },
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/tasks",
+            "methods": "GET",
+            "callback": "daszek_api_v1_tasks_list_compat"
+        },
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/tasks",
+            "methods": "POST",
+            "callback": "daszek_api_v1_tasks_create_compat"
+        },
+        {
+            "source_file": "api.php",
+            "namespace": "daszek\/includes",
+            "path": "\/tasks\/(?P<id>[a-zA-Z0-9_:-]+)\/done",
+            "methods": "POST",
+            "callback": "daszek_api_v1_tasks_done_compat"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/action-proposals\/(?P<id>[a-zA-Z0-9_:-]+)\/approve",
+            "methods": "POST",
+            "callback": "daszek_api_v2_action_proposal_approve"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/action-proposals\/(?P<id>[a-zA-Z0-9_:-]+)\/reject",
+            "methods": "POST",
+            "callback": "daszek_api_v2_action_proposal_reject"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/agent-chat",
+            "methods": "POST",
+            "callback": "daszek_api_v2_agent_chat"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/agent-hitl\/approve",
+            "methods": "POST",
+            "callback": "daszek_api_v2_agent_hitl_approve"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/agent-hitl\/send",
+            "methods": "POST",
+            "callback": "daszek_api_v2_agent_hitl_send"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/ai-quality",
+            "methods": "GET",
+            "callback": "daszek_api_v2_ai_quality"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/bridge-queue",
+            "methods": "GET",
+            "callback": "daszek_api_v2_bridge_queue"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/bridge-queue\/complete",
+            "methods": "POST",
+            "callback": "daszek_api_v2_bridge_queue_complete"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/calibration-profile",
+            "methods": "GET",
+            "callback": "daszek_api_v2_calibration_profile"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/case-archive",
+            "methods": "GET",
+            "callback": "daszek_api_v2_case_archive"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/cases",
+            "methods": "GET",
+            "callback": "daszek_api_v2_cases"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v2_case_detail"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)\/archive",
+            "methods": "POST",
+            "callback": "daszek_api_v2_case_archive_mutate"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)\/unarchive",
+            "methods": "POST",
+            "callback": "daszek_api_v2_case_unarchive"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/day",
+            "methods": "GET",
+            "callback": "daszek_api_v2_day"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/desk",
+            "methods": "GET",
+            "callback": "daszek_api_v2_desk"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/desk-notes\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v2_note_detail"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/desk-notes\/(?P<id>[a-zA-Z0-9_:-]+)\/feedback",
+            "methods": "POST",
+            "callback": "daszek_api_v2_note_feedback"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/engagements\/(?P<id>[a-zA-Z0-9_:-]+)\/materialize\/approve",
+            "methods": "POST",
+            "callback": "daszek_api_v2_engagement_materialize_approve"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/identity\/merge",
+            "methods": "POST",
+            "callback": "daszek_api_v2_identity_merge"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/identity\/suggestions",
+            "methods": "GET",
+            "callback": "daszek_api_v2_identity_suggestions"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/ingest",
+            "methods": "POST",
+            "callback": "daszek_api_v2_ingest"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/mailbox-cases",
+            "methods": "GET",
+            "callback": "daszek_api_v2_mailbox_cases_list"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/tasks",
+            "methods": "GET",
+            "callback": "daszek_api_v2_tasks_list"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/tasks",
+            "methods": "POST",
+            "callback": "daszek_api_v2_tasks_create"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/tasks\/(?P<id>[a-zA-Z0-9_:-]+)\/confirm",
+            "methods": "POST",
+            "callback": "daszek_api_v2_tasks_confirm"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/tasks\/(?P<id>[a-zA-Z0-9_:-]+)\/done",
+            "methods": "POST",
+            "callback": "daszek_api_v2_tasks_done"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/tasks\/(?P<id>[a-zA-Z0-9_:-]+)\/reject",
+            "methods": "POST",
+            "callback": "daszek_api_v2_tasks_reject"
+        },
+        {
+            "source_file": "api-v2.php",
+            "namespace": "daszek\/v2",
+            "path": "\/thread-memory\/(?P<id>[^\/]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v2_thread_memory"
+        },
+        {
+            "source_file": "proxy-agent-chat.php",
+            "namespace": "daszek\/v3",
+            "path": "\/agent-chat",
+            "methods": "POST",
+            "callback": "daszek_proxy_agent_chat_sync"
+        },
+        {
+            "source_file": "proxy-agent-chat.php",
+            "namespace": "daszek\/v3",
+            "path": "\/agent-chat\/feedback",
+            "methods": "POST",
+            "callback": "daszek_proxy_agent_chat_feedback"
+        },
+        {
+            "source_file": "proxy-agent-chat.php",
+            "namespace": "daszek\/v3",
+            "path": "\/agent-chat\/health",
+            "methods": "GET",
+            "callback": "daszek_proxy_agent_chat_health"
+        },
+        {
+            "source_file": "proxy-agent-chat.php",
+            "namespace": "daszek\/v3",
+            "path": "\/agent-chat\/stream",
+            "methods": "POST",
+            "callback": "daszek_proxy_agent_chat_stream"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/ai-quality",
+            "methods": "GET",
+            "callback": "daszek_api_v2_ai_quality"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/case-archive",
+            "methods": "GET",
+            "callback": "daszek_api_v2_case_archive"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cases",
+            "methods": "GET",
+            "callback": "daszek_api_v2_cases"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v2_case_detail"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)\/engagement",
+            "methods": "GET",
+            "callback": "daszek_api_v3_case_engagement"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)\/skrzat\/ask",
+            "methods": "POST",
+            "callback": "daszek_api_v3_skrzat_ask"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cases\/(?P<id>[a-zA-Z0-9_:-]+)\/state-summary",
+            "methods": "GET",
+            "callback": "daszek_api_v3_case_state_summary"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cockpit",
+            "methods": "GET",
+            "callback": "daszek_api_v3_cockpit"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cohort-runs",
+            "methods": "GET",
+            "callback": "daszek_api_v3_cohort_runs"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cohort-runs",
+            "methods": "POST",
+            "callback": "daszek_api_v3_cohort_run_ingest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/cohort-runs\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v3_cohort_run_detail"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/day",
+            "methods": "GET",
+            "callback": "daszek_api_v2_day"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/desk",
+            "methods": "GET",
+            "callback": "daszek_api_v2_desk"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/desk-notes\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v2_note_detail"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/engagements\/(?P<id>[a-zA-Z0-9_:-]+)\/os-events",
+            "methods": "GET",
+            "callback": "daszek_api_v3_engagement_os_events"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/engagements\/(?P<id>[a-zA-Z0-9_:-]+)\/snapshot",
+            "methods": "GET",
+            "callback": "daszek_api_v3_engagement_snapshot"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/engagements\/(?P<id>[a-zA-Z0-9_:-]+)\/timeline",
+            "methods": "GET",
+            "callback": "daszek_api_v3_engagement_timeline"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/identity\/binding-suggestions",
+            "methods": "GET",
+            "callback": "daszek_api_v3_identity_binding_suggestions"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/identity\/binding-suggestions\/(?P<id>[a-zA-Z0-9_:-]+)\/status",
+            "methods": "POST",
+            "callback": "daszek_api_v3_identity_binding_suggestion_status"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/ingress-quality-snapshots",
+            "methods": "GET",
+            "callback": "daszek_api_v3_ingress_quality_snapshots_list"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/ingress-quality-snapshots",
+            "methods": "POST",
+            "callback": "daszek_api_v3_ingress_quality_snapshot_ingest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/ingress-quality-snapshots\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v3_ingress_quality_snapshot_detail"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/ingress-quality-snapshots\/latest",
+            "methods": "GET",
+            "callback": "daszek_api_v3_ingress_quality_snapshot_latest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/learning\/rule-candidates",
+            "methods": "GET",
+            "callback": "daszek_api_v3_learning_rule_candidates"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/learning\/rule-candidates\/(?P<id>[a-zA-Z0-9_:-]+)\/status",
+            "methods": "POST",
+            "callback": "daszek_api_v3_learning_rule_candidate_status"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/operational-feed-snapshots",
+            "methods": "GET",
+            "callback": "daszek_api_v3_operational_feed_snapshots_list"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/operational-feed-snapshots",
+            "methods": "POST",
+            "callback": "daszek_api_v3_operational_feed_snapshot_ingest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/operational-feed-snapshots\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v3_operational_feed_snapshot_detail"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/operational-feed-snapshots\/latest",
+            "methods": "GET",
+            "callback": "daszek_api_v3_operational_feed_snapshot_latest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system-health-snapshots",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_health_snapshots_list"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system-health-snapshots",
+            "methods": "POST",
+            "callback": "daszek_api_v3_system_health_snapshot_ingest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system-health-snapshots\/(?P<id>[a-zA-Z0-9_:-]+)",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_health_snapshot_detail"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system-health-snapshots\/latest",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_health_snapshot_latest"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/bridge-queue\/summary",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_bridge_queue_summary"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/briefing",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_briefing"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/constitution",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_constitution"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/cost-summary",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_cost_summary"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/decision-queue",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_decision_queue"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/health\/status",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_health_status"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/os-events\/recent",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_os_events_recent"
+        },
+        {
+            "source_file": "api-v3.php",
+            "namespace": "daszek\/v3",
+            "path": "\/system\/quality-summary",
+            "methods": "GET",
+            "callback": "daszek_api_v3_system_quality_summary"
+        }
+    ]
+}

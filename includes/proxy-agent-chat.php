@@ -110,6 +110,10 @@ function daszek_chat_error(int $status, string $code, string $message): WP_Error
 /* ── Sync /agent-chat ───────────────────────────────────────────────── */
 
 function daszek_proxy_agent_chat_sync(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
     $body = $request->get_json_params();
     if (!is_array($body) || (empty($body['user_input']) && empty($body['brief']))) {
         return daszek_chat_error(400, 'invalid_payload', 'Wymagane user_input lub brief=true.');
@@ -145,6 +149,10 @@ function daszek_proxy_agent_chat_sync(WP_REST_Request $request) {
 /* ── Streaming SSE /agent-chat/stream ──────────────────────────────── */
 
 function daszek_proxy_agent_chat_stream(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
     $nb = daszek_chat_node_b_config();
     if ($nb['base_url'] === '') {
         return daszek_chat_error(503, 'node_b_unconfigured', 'Brak konfiguracji DASZEK_NODE_B_API_BASE.');
@@ -222,6 +230,10 @@ function daszek_proxy_agent_chat_stream(WP_REST_Request $request) {
 /* ── Feedback /agent-chat/feedback ─────────────────────────────────── */
 
 function daszek_proxy_agent_chat_feedback(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
     $body = $request->get_json_params();
     if (!is_array($body) || empty($body['session_id']) || empty($body['turn_id']) || empty($body['rating'])) {
         return daszek_chat_error(400, 'invalid_payload', 'Wymagane session_id, turn_id, rating.');

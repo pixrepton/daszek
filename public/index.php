@@ -44,7 +44,7 @@ $csrf = daszek_generate_csrf_token();
                         </div>
 
                         <button type="submit" class="btn btn-primary btn-full">Zaloguj</button>
-                        <div id="login-error" class="error-message" style="display:none;"></div>
+                        <div id="login-error" class="error-message" style="display:none;" role="alert" aria-live="assertive"></div>
                     </form>
                 </div>
             </div>
@@ -75,7 +75,6 @@ $csrf = daszek_generate_csrf_token();
                 <button type="button" class="view-tab" data-view="cases">Sprawy Case OS</button>
                 <button type="button" class="view-tab" data-view="day">Dzień</button>
                 <button type="button" class="view-tab" data-view="archive">Archiwum</button>
-                <button type="button" class="view-tab" data-view="tasks">Zadania</button>
                 <button type="button" class="view-tab" data-view="chat">Czat</button>
                 <div class="view-tabs-more">
                     <button type="button" id="view-tabs-more-btn" class="view-tab view-tab-more" aria-haspopup="true" aria-expanded="false">Więcej ▾</button>
@@ -86,6 +85,7 @@ $csrf = daszek_generate_csrf_token();
                         <button type="button" class="view-tab-more-item nav-link" data-view="last_ingress">Ostatni ingress</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="cohort_runs">Kohorty</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="decisions">Kolejka decyzji</button>
+                        <button type="button" class="view-tab-more-item nav-link" data-view="identity">Tożsamość</button>
                         <button type="button" class="view-tab-more-item nav-link" data-view="constitution">Konstytucja</button>
                     </div>
                 </div>

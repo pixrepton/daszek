@@ -95,6 +95,32 @@ function daszek_v3_snapshot_sort_key($row) {
     return '';
 }
 
+function daszek_v3_operational_feed_snapshot_retention_limit() {
+    $cfg = daszek_get_config();
+    $limit = 40;
+    if (is_array($cfg) && isset($cfg['operational_feed']['snapshot_retention'])) {
+        $limit = (int) $cfg['operational_feed']['snapshot_retention'];
+    }
+    return max(5, min(200, $limit));
+}
+
+/**
+ * Keep only the newest $limit operational feed snapshots (by ingested_at / generated_at).
+ */
+function daszek_v3_trim_operational_feed_snapshots($rows, $limit = 0) {
+    if (!is_array($rows)) {
+        return [];
+    }
+    $limit = $limit > 0 ? $limit : daszek_v3_operational_feed_snapshot_retention_limit();
+    if (count($rows) <= $limit) {
+        return $rows;
+    }
+    usort($rows, function ($left, $right) {
+        return strcmp(daszek_v3_snapshot_sort_key($right), daszek_v3_snapshot_sort_key($left));
+    });
+    return array_slice($rows, 0, $limit);
+}
+
 function daszek_v3_rewrite_jsonl_file($path, $rows) {
     if (!is_array($rows)) {
         return false;
@@ -276,6 +302,8 @@ function daszek_v3_upsert_operational_feed_snapshot($snapshot) {
     }
 
     $filtered[] = $snapshot;
+
+    $filtered = daszek_v3_trim_operational_feed_snapshots($filtered);
 
     return daszek_v3_rewrite_operational_feed_snapshots($filtered);
 }
