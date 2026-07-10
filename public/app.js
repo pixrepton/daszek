@@ -2140,8 +2140,8 @@ let lastIngressViewRequestId = 0;
 function viewConfig() {
     return {
         desk: {
-            title: 'Biurko',
-            subtitle: 'Jedna lista: to, co wymaga Ciebie teraz. Pełny rejestr jest w zakładce Sprawy.',
+            title: 'Biurko Case OS',
+            subtitle: 'Jedna lista: to, co wymaga Ciebie teraz. Pełny rejestr jest w zakładce Sprawy Case OS.',
         },
         cockpit: {
             title: 'Cockpit V3',
@@ -2172,8 +2172,8 @@ function viewConfig() {
             subtitle: 'Lista bounded cohort z Node B (read-only) — szczegóły w panelu bocznym.',
         },
         system: {
-            title: 'System',
-            subtitle: 'Oś zdarzeń cross-repo (Node B) — projekcja read-only, nie magazyn prawdy.',
+            title: 'System Case OS',
+            subtitle: 'Oś zdarzeń cross-repo (Node B) — projekcja read-only. Kanał Oferta HVAC to równoległa ścieżka (kalk-top).',
         },
         chat: {
             title: 'Czat',
@@ -4986,6 +4986,7 @@ function renderDocumentIntelligenceBlock(block = {}) {
 }
 
 function renderDecisionViewSection(dv) {
+    // decision_pipeline_v2 + source_spine: read-only Case OS projection from Node B feed/case detail.
     if (!dv || typeof dv !== 'object') {
         return '';
     }
