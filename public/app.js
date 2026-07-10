@@ -5630,22 +5630,19 @@ function isMaterializeProposalId(proposalId) {
 function resolveEngagementIdForMaterializeProposal(proposalId) {
     const fromChat = findEngagementIdForProposal(proposalId);
     if (fromChat) return fromChat;
-    if (state.detail && state.detail.type === 'case') {
-        const eng = state.detail.engagement;
-        if (eng && eng.engagement_id) return String(eng.engagement_id).trim();
-    }
-    return '';
+    return resolveEngagementIdFromCaseDetail(state.detail);
 }
 
 async function approveProposalViaApi(proposalId, decision, reason) {
     if (decision === 'approve' && isMaterializeProposalId(proposalId)) {
         const engagementId = resolveEngagementIdForMaterializeProposal(proposalId);
-        if (engagementId) {
-            return apiFetch(V2_API_BASE, `/engagements/${encodeURIComponent(engagementId)}/materialize/approve`, {
-                method: 'POST',
-                body: JSON.stringify({ proposal_id: proposalId, reason: reason || '' }),
-            });
+        if (!engagementId) {
+            throw new Error('Brak engagement_id — odśwież szczegóły sprawy przed zatwierdzeniem materialize.');
         }
+        return apiFetch(V2_API_BASE, `/engagements/${encodeURIComponent(engagementId)}/materialize/approve`, {
+            method: 'POST',
+            body: JSON.stringify({ proposal_id: proposalId, reason: reason || '' }),
+        });
     }
     return apiFetch(V2_API_BASE, `/action-proposals/${encodeURIComponent(proposalId)}/${decision}`, {
         method: 'POST',
