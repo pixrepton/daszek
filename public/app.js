@@ -83,6 +83,8 @@ function getCsrfToken() {
 }
 
 state.csrfToken = getCsrfToken();
+state.hitlAction = state.hitlAction || { pending: false, awaitingSync: false, engagementId: '', kind: '', noteId: '', decisionKey: '', status: '' };
+state.actionDecision = state.actionDecision || { pending: false, awaitingSync: false, proposalId: '', decision: '', decisionKey: '', status: '' };
 
 function buildApiUrl(base, endpoint, method = 'GET') {
     const url = new URL(`${base}${endpoint}`, window.location.origin);
@@ -834,6 +836,35 @@ function renderAboutCaseSection(caseItem) {
             </section>`;
     }
     return html;
+}
+
+function renderWhyOnDeskSection(caseItem) {
+    // A1: case cards had no "why is this on my desk today" explanation (only
+    // note cards did, via the same why_on_desk field). Only rendered when
+    // Node B honestly populated it from a fresh, correlated Understanding —
+    // omitted otherwise, never a guessed reason.
+    const whySee = String(caseItem.why_on_desk || '').trim();
+    if (!whySee) {
+        return '';
+    }
+    return `
+        <section class="detail-section">
+            <h3>Dlaczego to widzę</h3>
+            <p>${escapeHtml(whySee)}</p>
+        </section>`;
+}
+
+function renderWhatChangedSection(caseItem) {
+    // A1: "what changed since last time" — only shown when honestly available.
+    const changed = String(caseItem.what_changed_pl || '').trim();
+    if (!changed) {
+        return '';
+    }
+    return `
+        <section class="detail-section">
+            <h3>Co się zmieniło</h3>
+            <p>${escapeHtml(changed)}</p>
+        </section>`;
 }
 
 function renderDetailSectionIfContent(title, htmlBody) {
@@ -4016,6 +4047,7 @@ async function openNoteDetail(noteId) {
         };
         setDetailPanelChromeOpen(true);
         renderDetailPanel();
+        void refreshNoteDetailLiveContext();
         return;
     }
     if (hasOperationalFeedSnapshot() && isFeedProjectionNoteId(nid)) {
@@ -4037,6 +4069,7 @@ async function openNoteDetail(noteId) {
         const detail = await apiFetch(V3_API_BASE, `/desk-notes/${encodeURIComponent(nid)}`);
         state.detail = { type: 'note', payload: detail, source: 'v3_live' };
         renderDetailPanel();
+        void refreshNoteDetailLiveContext();
     } catch (error) {
         const st = Number(error.status || 0);
         let msg = String(error.message || 'Błąd wczytania kartki.');
@@ -4059,20 +4092,56 @@ async function openNoteDetail(noteId) {
     }
 }
 
+function resolveEngagementIdFromNoteDetail(detail) {
+    if (!detail || detail.type !== 'note') {
+        return '';
+    }
+    const payload = detail.payload && typeof detail.payload === 'object' ? detail.payload : {};
+    const note = payload.note && typeof payload.note === 'object' ? payload.note : {};
+    return String(note.engagement_id || payload.engagement_id || '').trim();
+}
+
+async function refreshNoteDetailLiveContext() {
+    if (!state.detail || state.detail.type !== 'note') {
+        return;
+    }
+    let eid = resolveEngagementIdFromNoteDetail(state.detail);
+    const payload = state.detail.payload && typeof state.detail.payload === 'object' ? state.detail.payload : {};
+    const note = payload.note && typeof payload.note === 'object' ? payload.note : {};
+    const caseItem = payload.case && typeof payload.case === 'object' ? payload.case : {};
+    const caseId = String(caseItem.case_id || note.case_id || payload.case_id || '').trim();
+    if (!eid && caseId) {
+        try {
+            const eng = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(caseId)}/engagement`);
+            if (eng && typeof eng.engagement === 'object') {
+                state.detail.engagement = eng.engagement;
+                eid = String(eng.engagement.engagement_id || '').trim();
+            }
+        } catch (_engErr) {
+            // optional enrichment only
+        }
+    }
+    if (!eid) {
+        state.detail.osEvents = { ok: false, items: [], loadError: null, engagement_id: '', loading: false };
+        renderDetailPanel();
+        return;
+    }
+    state.detail.osEvents = { ok: false, items: [], loadError: null, engagement_id: eid, loading: true };
+    renderDetailPanel();
+    const loaded = await loadOsEventsForEngagement(eid);
+    if (!state.detail || state.detail.type !== 'note') {
+        return;
+    }
+    state.detail.osEvents = { ...loaded, loading: false };
+    renderDetailPanel();
+}
+
 async function openCaseDetail(caseId) {
     const cid = String(caseId || '').trim();
     if (!cid) {
         return;
     }
     clearError();
-    const fromFeed = resolveOperationalFeedCaseDetail(cid);
-    if (fromFeed) {
-        state.detail = { type: 'case', payload: fromFeed, source: 'operational_feed' };
-        setDetailPanelChromeOpen(true);
-        renderDetailPanel();
-        void refreshCaseDetailOsEvents();
-        return;
-    }
     state.detail = { type: 'detail_loading', mode: 'case', id: cid };
     setDetailPanelChromeOpen(true);
     renderDetailPanel();
@@ -4095,6 +4164,26 @@ async function openCaseDetail(caseId) {
             msg = `Sprawa „${cid}” nie występuje w magazynie v2 ani w bieżącej migawce operational feed. Odśwież zasilenie z Node B.`;
         } else if (st === 404) {
             msg = `Sprawa „${cid}” nie istnieje w magazynie v2. Możliwy stary snapshot lub rozjazd zasilenia.`;
+        }
+        const fromFeed = resolveOperationalFeedCaseDetail(cid);
+        if (fromFeed && st !== 401 && st !== 403) {
+            const source = fromFeed.feed_read_only_stub ? 'operational_feed_stub_fallback' : 'operational_feed_fallback';
+            state.detail = {
+                type: 'case',
+                payload: {
+                    ...fromFeed,
+                    live_detail_fetch_failed: true,
+                    live_detail_error: msg,
+                },
+                source,
+                liveError: {
+                    message: msg,
+                    httpStatus: st,
+                },
+            };
+            renderDetailPanel();
+            void refreshCaseDetailOsEvents();
+            return;
         }
         state.detail = {
             type: 'detail_error',
@@ -4384,6 +4473,66 @@ function renderHitlOperatorActions(caseItem, payload) {
             </div>
         </section>`;
 }
+
+renderHitlOperatorActions = function(caseItem, payload, options = {}) {
+    const row = caseItem || {};
+    const opts = options || {};
+    const hitlPending = Boolean(
+        row.hitl_pending
+        || row.hitl_required
+        || (payload && payload.hitl_pending)
+        || (payload && payload.hitl_gate && payload.hitl_gate.required)
+    );
+    if (!hitlPending) {
+        return '';
+    }
+    const engagementId = String(row.engagement_id || (payload && payload.engagement_id) || '').trim();
+    if (!engagementId) {
+        return '';
+    }
+    const caseId = String(row.case_id || (payload && payload.case_id) || '').trim();
+    const noteId = String(row.note_id || '').trim();
+    const actionId = String(row.hitl_action_id || (payload && payload.hitl_action_id) || 'draft_reply').trim();
+    const draft = String(row.draft_reply_pl || (payload && payload.draft_reply_pl) || '').trim();
+    const hasDraft = draft.length > 0;
+    const approveOnly = opts.approveOnly === true;
+    const hitlRequest = state.hitlAction || {};
+    const requestPending = Boolean(
+        hitlRequest.engagementId === engagementId && (hitlRequest.pending || hitlRequest.awaitingSync)
+    );
+    const approvePending = requestPending && hitlRequest.kind === 'approve';
+    const sendPending = requestPending && hitlRequest.kind === 'send';
+    const asks = Array.isArray(row.operator_questions_pl)
+        ? row.operator_questions_pl
+        : (Array.isArray(payload && payload.operator_questions_pl) ? payload.operator_questions_pl : []);
+    const draftBlock = hasDraft
+        ? `<label class="ds-draft-label" for="ds-hitl-draft">Tresc odpowiedzi (mozesz edytowac przed wysylka)</label>
+           <textarea id="ds-hitl-draft" class="ds-draft" data-hitl-draft rows="8" ${requestPending ? 'disabled' : ''}>${escapeHtml(draft)}</textarea>`
+        : `<p class="detail-muted">Brak gotowego draftu - decyzja nalezy do Ciebie. Asystent zebral kontekst sprawy.</p>
+           ${asks.length ? `<ul class="ds-ask">${asks.map(q => `<li>${escapeHtml(String(q))}</li>`).join('')}</ul>` : ''}`;
+    const primaryAction = approveOnly
+        ? ''
+        : (
+            hasDraft
+                ? `<button type="button" class="btn btn-primary" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-note="${escapeHtml(noteId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Wyslij ta odpowiedz do klienta" ${requestPending ? 'disabled' : ''}>${sendPending ? 'Wysylam...' : 'Wyslij odpowiedz'}</button>`
+                : `<button type="button" class="btn btn-primary" disabled data-tooltip="Najpierw potrzebny jest draft odpowiedzi">Wyslij odpowiedz (brak draftu)</button>`
+        );
+    const approveLabel = approvePending ? 'Zatwierdzam...' : 'Zatwierdz bez wysylki';
+    const sectionTitle = approveOnly ? 'Decyzja operatora' : 'Odpowiedz do klienta';
+    const sectionLead = approveOnly
+        ? 'Zatwierdzenie zapisze decyzje HITL w Node B bez wysylki maila.'
+        : 'Nic nie wychodzi bez Twojego klikniecia. Przejrzyj, popraw i wyslij.';
+    return `
+        <section class="detail-section detail-section-actions detail-section-reply">
+            <h3>${sectionTitle}</h3>
+            <p class="detail-muted">${sectionLead}</p>
+            ${draftBlock}
+            <div class="hitl-actions">
+                ${primaryAction}
+                <button type="button" class="btn btn-ghost btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-note="${escapeHtml(noteId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Zatwierdz plan agenta bez wysylki maila" ${requestPending ? 'disabled' : ''}>${approveLabel}</button>
+            </div>
+        </section>`;
+};
 
 function renderAgentTurnsSection(turns) {
     if (!Array.isArray(turns) || !turns.length) {
@@ -5393,6 +5542,8 @@ function renderDetailPanel() {
 
                 ${renderCaseAttachmentsSection(note)}
 
+                ${renderHitlOperatorActions(note, payload, { approveOnly: true })}
+
                 ${renderNoteFeedbackBlock(note)}
 
                 ${renderGuidanceSection(note)}
@@ -5421,6 +5572,8 @@ function renderDetailPanel() {
                     <h3>Powiązana sprawa</h3>
                     ${caseItem ? `<button type="button" class="link-button" data-open-case="${escapeHtml(caseItem.case_id)}">${escapeHtml(caseItem.title || 'Otwórz sprawę')}</button>` : '<p class="detail-muted">Kartka nie jest jeszcze powiązana ze sprawą.</p>'}
                 </section>
+
+                ${renderOsEventsSection(state.detail.osEvents)}
 
                 ${noteTech}
             </div>
@@ -5476,6 +5629,10 @@ function renderDetailPanel() {
             ${renderCaseAttachmentsSection(caseItem)}
 
             ${renderAboutCaseSection(caseItem)}
+
+            ${renderWhyOnDeskSection(caseItem)}
+
+            ${renderWhatChangedSection(caseItem)}
 
             ${feedbackNote ? renderNoteFeedbackBlock(feedbackNote) : ''}
 
@@ -5623,6 +5780,165 @@ async function submitHitlAgentAction(trigger, kind) {
     }
 }
 
+submitHitlAgentAction = async function(trigger, kind) {
+    const engagementId = String(trigger.dataset.hitlApprove || trigger.dataset.hitlSend || '').trim();
+    const caseId = String(trigger.dataset.hitlCase || '').trim();
+    const noteId = String(
+        trigger.dataset.hitlNote
+        || (state.detail && state.detail.type === 'note' && state.detail.payload && state.detail.payload.note && state.detail.payload.note.note_id)
+        || (engagementId ? `desk-${engagementId}` : '')
+    ).trim();
+    const actionId = String(trigger.dataset.hitlAction || 'draft_reply').trim();
+    if (!engagementId) {
+        showError('Brak engagement_id - odswiez szczegoly kartki.');
+        return;
+    }
+    if (
+        state.hitlAction
+        && state.hitlAction.engagementId === engagementId
+        && state.hitlAction.kind === kind
+        && (state.hitlAction.pending || state.hitlAction.awaitingSync)
+    ) {
+        return;
+    }
+    const draftEl = document.querySelector('[data-hitl-draft]');
+    const draftText = draftEl ? String(draftEl.value || '').trim() : '';
+    if (kind === 'send' && !draftText) {
+        showError('Brak tresci draftu do wyslania - najpierw wygeneruj lub uzupelnij draft.');
+        return;
+    }
+    const endpoint = kind === 'send' ? '/agent-hitl/send' : '/agent-hitl/approve';
+    state.hitlAction = {
+        pending: true,
+        awaitingSync: false,
+        engagementId,
+        kind,
+        noteId,
+        decisionKey: '',
+        status: 'sending',
+    };
+    renderDetailPanel();
+    try {
+        const response = await apiFetch(V2_API_BASE, endpoint, {
+            method: 'POST',
+            body: JSON.stringify({
+                engagement_id: engagementId,
+                case_id: caseId,
+                action_id: actionId,
+                operator_id: state.currentUser || 'operator',
+                draft_pl: draftText,
+            }),
+        });
+        const decisionKey = String(
+            (response && (response.decision_key || (response.queued && response.queued.queue_id))) || ''
+        ).trim();
+        state.hitlAction = {
+            pending: false,
+            awaitingSync: true,
+            engagementId,
+            kind,
+            noteId,
+            decisionKey,
+            status: String((response && response.decision_status) || 'accepted').trim() || 'accepted',
+        };
+        showToast('Przyjeto do realizacji. Czekam na potwierdzenie w feedzie.');
+        await loadAllData();
+        if (caseId) {
+            await openCaseDetail(caseId);
+        } else if (noteId) {
+            await openNoteDetail(noteId);
+        }
+        const convergence = resolveHitlDecisionConvergence({ kind, decisionKey });
+        if (convergence.converged) {
+            state.hitlAction = {
+                pending: false,
+                awaitingSync: false,
+                engagementId: '',
+                kind: '',
+                noteId: '',
+                decisionKey,
+                status: convergence.status,
+            };
+            if (convergence.status === 'executed') {
+                showToast('Wykonanie potwierdzone w aktualnym feedzie.');
+            } else if (convergence.status === 'approved') {
+                showToast('Zatwierdzenie potwierdzone w aktualnym feedzie.');
+            }
+        } else if (convergence.status === 'outcome_unknown') {
+            state.hitlAction.status = 'outcome_unknown';
+            showError('Wynik wykonania jest nieznany. Sprawdz aktualny feed przed ponowieniem.');
+        }
+    } catch (error) {
+        state.hitlAction = { pending: false, awaitingSync: false, engagementId: '', kind: '', noteId: '', decisionKey: '', status: 'failed' };
+        if (Number(error.status || 0) === 409) {
+            showError('Konflikt wersji engagementu - odswiezam kartke i pobieram aktualny stan.');
+            await loadAllData();
+            if (caseId) {
+                await openCaseDetail(caseId);
+            } else if (noteId) {
+                await openNoteDetail(noteId);
+            } else {
+                renderDetailPanel();
+            }
+            return;
+        }
+        showError(error.message || 'Nie udalo sie zapisac decyzji HITL (sprawdz Node B / MCP).');
+    } finally {
+        if (!(state.hitlAction && state.hitlAction.pending)) {
+            renderDetailPanel();
+        }
+    }
+};
+
+function resolveHitlDecisionConvergence({ kind, decisionKey }) {
+    const detail = state.detail && typeof state.detail === 'object' ? state.detail : {};
+    const payload = detail.payload && typeof detail.payload === 'object' ? detail.payload : {};
+    const note = payload.note && typeof payload.note === 'object' ? payload.note : {};
+    const caseItem = payload.case && typeof payload.case === 'object' ? payload.case : {};
+    const engagement = detail.engagement && typeof detail.engagement === 'object'
+        ? detail.engagement
+        : (payload.engagement && typeof payload.engagement === 'object' ? payload.engagement : {});
+
+    if (kind === 'send') {
+        const executionResults = [
+            ...(Array.isArray(payload.execution_results) ? payload.execution_results : []),
+            ...(Array.isArray(caseItem.execution_results) ? caseItem.execution_results : []),
+        ];
+        const match = executionResults.find((item) => {
+            const resultPayload = item && typeof item.result_payload === 'object' ? item.result_payload : {};
+            return String(item && item.proposal_id || '').trim() === decisionKey
+                || String(resultPayload.decision_key || '').trim() === decisionKey;
+        });
+        if (!match) {
+            return { converged: false, status: 'accepted' };
+        }
+        const resultPayload = match && typeof match.result_payload === 'object' ? match.result_payload : {};
+        const decisionStatus = String(resultPayload.decision_status || '').trim().toLowerCase();
+        const executionStatus = String(match.execution_status || '').trim().toLowerCase();
+        if (decisionStatus === 'executed' || executionStatus === 'executed') {
+            return { converged: true, status: 'executed' };
+        }
+        if (decisionStatus === 'outcome_unknown' || executionStatus === 'blocked') {
+            return { converged: false, status: 'outcome_unknown' };
+        }
+        if (decisionStatus === 'failed_before_execution' || executionStatus === 'failed') {
+            return { converged: false, status: 'failed' };
+        }
+        return { converged: false, status: decisionStatus || executionStatus || 'accepted' };
+    }
+
+    const noteHitlRequired = note && note.hitl_required === true;
+    const gateRequired = Boolean(
+        engagement
+        && engagement.hitl_gate
+        && typeof engagement.hitl_gate === 'object'
+        && engagement.hitl_gate.required === true
+    );
+    return noteHitlRequired || gateRequired
+        ? { converged: false, status: 'accepted' }
+        : { converged: true, status: 'approved' };
+}
+
 function isMaterializeProposalId(proposalId) {
     return String(proposalId || '').trim().startsWith('prop_');
 }
@@ -5633,9 +5949,35 @@ function resolveEngagementIdForMaterializeProposal(proposalId) {
     return resolveEngagementIdFromCaseDetail(state.detail);
 }
 
+async function refreshEngagementIdForMaterializeProposal(proposalId) {
+    const cached = resolveEngagementIdForMaterializeProposal(proposalId);
+    if (cached) {
+        return cached;
+    }
+    if (!state.detail || state.detail.type !== 'case') {
+        return '';
+    }
+    const payload = state.detail.payload && typeof state.detail.payload === 'object' ? state.detail.payload : {};
+    const caseItem = payload.case && typeof payload.case === 'object' ? payload.case : {};
+    const caseId = String(caseItem.case_id || '').trim();
+    if (!caseId) {
+        return '';
+    }
+    try {
+        const eng = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(caseId)}/engagement`);
+        if (eng && typeof eng.engagement === 'object') {
+            state.detail.engagement = eng.engagement;
+            return resolveEngagementIdFromCaseDetail(state.detail);
+        }
+    } catch (_engErr) {
+        // engagement lookup optional — caller throws if still empty
+    }
+    return '';
+}
+
 async function approveProposalViaApi(proposalId, decision, reason) {
     if (decision === 'approve' && isMaterializeProposalId(proposalId)) {
-        const engagementId = resolveEngagementIdForMaterializeProposal(proposalId);
+        const engagementId = await refreshEngagementIdForMaterializeProposal(proposalId);
         if (!engagementId) {
             throw new Error('Brak engagement_id — odśwież szczegóły sprawy przed zatwierdzeniem materialize.');
         }
@@ -5655,17 +5997,83 @@ async function decideActionProposal(proposalId, decision) {
         showError('Tę decyzję może zapisać tylko owner Daszka.');
         return;
     }
+    if (
+        state.actionDecision
+        && state.actionDecision.proposalId === proposalId
+        && state.actionDecision.decision === decision
+        && (state.actionDecision.pending || state.actionDecision.awaitingSync)
+    ) {
+        return;
+    }
     const reason = window.prompt(decision === 'approve' ? 'Powód zatwierdzenia' : 'Powód odrzucenia', '') || '';
+    state.actionDecision = {
+        pending: true,
+        awaitingSync: false,
+        proposalId,
+        decision,
+        decisionKey: '',
+        status: 'sending',
+    };
     try {
-        await approveProposalViaApi(proposalId, decision, reason);
-        showToast(decision === 'approve' && isMaterializeProposalId(proposalId)
-            ? 'Materialize zatwierdzone — odświeżam widok.'
-            : 'Decyzja została zapisana do kolejki bridge.');
+        const response = await approveProposalViaApi(proposalId, decision, reason);
+        const decisionKey = String(
+            (response && (response.decision_key || (response.queued && response.queued.queue_id))) || ''
+        ).trim();
+        state.actionDecision = {
+            pending: false,
+            awaitingSync: true,
+            proposalId,
+            decision,
+            decisionKey,
+            status: String((response && response.decision_status) || 'accepted').trim() || 'accepted',
+        };
+        showToast('Przyjeto do realizacji. Czekam na potwierdzenie w feedzie.');
         await loadAllData();
         if (state.detail && state.detail.type === 'case') {
             await openCaseDetail(state.detail.payload.case.case_id);
         }
+        const detail = state.detail && typeof state.detail === 'object' ? state.detail : {};
+        const payload = detail.payload && typeof detail.payload === 'object' ? detail.payload : {};
+        const caseItem = payload.case && typeof payload.case === 'object' ? payload.case : {};
+        const proposals = [
+            ...(Array.isArray(payload.action_proposals) ? payload.action_proposals : []),
+            ...(Array.isArray(caseItem.action_proposals) ? caseItem.action_proposals : []),
+        ];
+        const proposal = proposals.find((item) => String(item && item.proposal_id || '').trim() === proposalId);
+        const finalStatus = String((proposal && proposal.status) || '').trim().toLowerCase();
+        if (
+            finalStatus
+            && (
+                (decision === 'reject' && finalStatus === 'rejected')
+                || (decision === 'approve' && finalStatus === 'approved')
+                || (decision === 'approve' && finalStatus === 'executed')
+            )
+        ) {
+            state.actionDecision = {
+                pending: false,
+                awaitingSync: false,
+                proposalId: '',
+                decision: '',
+                decisionKey,
+                status: finalStatus,
+            };
+            showToast(
+                decision === 'approve' && isMaterializeProposalId(proposalId)
+                    ? 'Materialize potwierdzone w aktualnym feedzie.'
+                    : 'Decyzja potwierdzona w aktualnym feedzie.'
+            );
+        } else {
+            state.actionDecision.status = finalStatus || 'accepted';
+        }
     } catch (error) {
+        state.actionDecision = {
+            pending: false,
+            awaitingSync: false,
+            proposalId: '',
+            decision: '',
+            decisionKey: '',
+            status: 'failed',
+        };
         showError(error.message);
     }
 }

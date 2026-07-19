@@ -25,6 +25,16 @@ function daszek_get_config() {
             'pass' => '',
             'ssl'  => true,
         ],
+        // DeepSeek is priority #1 for mail→task extraction (DEEPSEEK-MIGRATION-1): tried before
+        // Groq when enabled. Operational/auth failures fall back; request-contract bugs fail fast.
+        'deepseek' => [
+            'enabled'           => defined('DASZEK_DEEPSEEK_ENABLED') ? DASZEK_DEEPSEEK_ENABLED : (getenv('DEEPSEEK_API_KEY') ? true : false),
+            'api_key'           => defined('DASZEK_DEEPSEEK_API_KEY') ? DASZEK_DEEPSEEK_API_KEY : (getenv('DEEPSEEK_API_KEY') ?: ''),
+            'model'             => defined('DASZEK_DEEPSEEK_MODEL') ? DASZEK_DEEPSEEK_MODEL : (getenv('DEEPSEEK_MODEL') ?: 'deepseek-v4-flash'),
+            'base_url'          => defined('DASZEK_DEEPSEEK_BASE_URL') ? DASZEK_DEEPSEEK_BASE_URL : (getenv('DEEPSEEK_BASE_URL') ?: 'https://api.deepseek.com'),
+            'thinking_enabled'  => defined('DASZEK_DEEPSEEK_THINKING') ? DASZEK_DEEPSEEK_THINKING : (strtolower((string) (getenv('DEEPSEEK_THINKING_ENABLED') ?: 'true')) !== 'false'),
+            'reasoning_effort'  => defined('DASZEK_DEEPSEEK_EFFORT') ? DASZEK_DEEPSEEK_EFFORT : (getenv('DEEPSEEK_REASONING_EFFORT') ?: 'high'),
+        ],
         'groq' => [
             'enabled' => false,
             'api_key' => '',

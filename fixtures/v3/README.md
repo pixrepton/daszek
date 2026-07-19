@@ -1,6 +1,6 @@
 ﻿# Daszek V3 — fixtures (syntetyczne)
 
-> **Uwaga (2026-06-11):** ten folder jest **legacy/orphaned** — kanon operacji i kontraktów: [`../../README-DASZEK.md`](../../README-DASZEK.md) §7. Pliki JSON pozostają jako referencja kontraktu feedu.
+> **Uwaga (2026-06-11):** ten folder jest **legacy/orphaned** — kanon operacji i kontraktów: `../docs/core/PROJECT_README.md`. Pliki JSON pozostają jako referencja kontraktu feedu.
 
 Statyczne payloady do ręcznego podglądu lub testów smoke (bez danych klientów).
 
@@ -18,6 +18,7 @@ Statyczne payloady do ręcznego podglądu lub testów smoke (bez danych klientó
 | `operational_feed_snapshot.json` | Bogaty operational feed (Biurko → Dzień → Sprawy → Zadania + `case_details`)     |
 | `operational_feed_empty.json`    | Prawidłowy envelope feedu — puste listy (empty states w UI)                      |
 | `operational_feed_sparse.json`   | Jedna sprawa minimalna + szczegół w `case_details`; brak bogatych sekcji         |
+| `operational_feed_agent_runtime.json` | Feed z EngagementSnapshot.v2 (`gmail-agent.tools.gmail_audit.daszek_engagement_feed`) — HITL agent runtime |
 
 **Eksport Node B:** migawka z `python tools/gmail_audit/daszek_v3_operational_feed.py --from-mailbox-memory` powinna pasować do tego samego kontraktu co `operational_feed_snapshot.json` (`schema_name`: `daszek_operational_feed_snapshot`, pole `feed`).
 
@@ -48,3 +49,4 @@ Po zmianach w `daszek/public/app.js` otwórz kolejno fixture w mocku szczegółu
 - Na czym system opiera tę sugestię?
 - Czy to już zostało wykonane?
 - Czy to wymaga mojej akceptacji?
+

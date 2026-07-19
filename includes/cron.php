@@ -135,12 +135,10 @@ function daszek_process_mailbox() {
             $due_date = date('Y-m-d', strtotime('+7 days'));
         }
 
-        // Jeśli włączone Groq, użyj AI do ekstrakcji
-        if ($config['groq']['enabled']) {
-            $extracted = daszek_extract_with_groq($subject, $message);
-            if ($extracted && isset($extracted['due_date'])) {
-                $due_date = $extracted['due_date'];
-            }
+        // DeepSeek priority #1 (DEEPSEEK-MIGRATION-1), then Groq, then the regex above.
+        $extracted = daszek_extract_task_fields($subject, $message);
+        if ($extracted && isset($extracted['due_date'])) {
+            $due_date = $extracted['due_date'];
         }
 
         // Utwórz zadanie
@@ -163,7 +161,95 @@ function daszek_process_mailbox() {
 }
 
 /**
- * Ekstrakcja danych z użyciem Groq AI
+ * Ekstrakcja pól zadania z maila. Priorytet #1: DeepSeek V4 Flash (DEEPSEEK-MIGRATION-1),
+ * fallback: Groq. Zwraca null gdy żaden provider nie jest skonfigurowany/dostępny — wtedy
+ * caller korzysta z deterministycznej ekstrakcji regex (semantyka best-effort bez zmian).
+ */
+function daszek_extract_task_fields($subject, $body) {
+    $extracted = daszek_extract_with_deepseek($subject, $body);
+    if ($extracted !== null) {
+        return $extracted;
+    }
+    return daszek_extract_with_groq($subject, $body);
+}
+
+/**
+ * Ekstrakcja danych z użyciem DeepSeek V4 Flash (OpenAI-compatible, JSON Output + thinking mode).
+ * Czyta wyłącznie choices[0].message.content (finalna odpowiedź) — reasoning_content DeepSeeka
+ * nigdy nie jest traktowany jako wynik biznesowy. Zwraca null przy błędach operacyjnych/auth
+ * → fallback Groq; request-contract bug jest fail-fast.
+ */
+function daszek_extract_with_deepseek($subject, $body) {
+    $config = daszek_get_config();
+    $ds = isset($config['deepseek']) ? $config['deepseek'] : null;
+
+    if (!$ds || empty($ds['enabled']) || empty($ds['api_key'])) {
+        return null;
+    }
+
+    $prompt = "Jesteś asystentem analizującym maile firmowe. Z poniższego maila wyodrębnij:\n" .
+              "- has_task (bool): czy mail zawiera zadanie do wykonania?\n" .
+              "- title (string): krótki tytuł zadania\n" .
+              "- due_date (string YYYY-MM-DD lub null): termin wykonania\n" .
+              "- amount (number lub null): kwota jeśli występuje\n\n" .
+              "Zwróć tylko czysty JSON.\n\n" .
+              "Temat: {$subject}\n\nTreść: {$body}";
+
+    $data = [
+        'model' => $ds['model'],
+        'messages' => [
+            ['role' => 'system', 'content' => 'Jesteś asystentem ekstrakcji danych z maili. Zwracasz czysty JSON.'],
+            ['role' => 'user', 'content' => $prompt],
+        ],
+        'response_format' => ['type' => 'json_object'],
+    ];
+    if (!empty($ds['thinking_enabled'])) {
+        // DeepSeek thinking mode: thinking + reasoning_effort as top-level fields (native API).
+        $data['thinking'] = ['type' => 'enabled'];
+        $data['reasoning_effort'] = !empty($ds['reasoning_effort']) ? $ds['reasoning_effort'] : 'high';
+    } else {
+        $data['temperature'] = 0.2;
+    }
+
+    $base = rtrim(!empty($ds['base_url']) ? $ds['base_url'] : 'https://api.deepseek.com', '/');
+    $endpoint = (substr($base, -14) === '/chat/completions') ? $base : $base . '/chat/completions';
+
+    $ch = curl_init($endpoint);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $ds['api_key'],
+    ]);
+
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ((int) $http_code === 400) {
+        throw new Exception('Daszek DeepSeek request/contract error: HTTP ' . (int) $http_code);
+    }
+    if (in_array((int) $http_code, [401, 403], true)) {
+        error_log('Daszek DeepSeek primary-provider configuration failure; falling back to Groq. HTTP ' . (int) $http_code);
+        return null;
+    }
+    if ($http_code !== 200 || !$response) {
+        return null;
+    }
+
+    $result = json_decode($response, true);
+    $content = $result['choices'][0]['message']['content'] ?? '';
+    if ($content === '' || $content === null) {
+        // Empty final answer (e.g. thinking budget) — fall through to Groq.
+        return null;
+    }
+    $parsed = json_decode($content, true);
+    return is_array($parsed) ? $parsed : null;
+}
+
+/**
+ * Ekstrakcja danych z użyciem Groq AI (fallback po DeepSeek).
  */
 function daszek_extract_with_groq($subject, $body) {
     $config = daszek_get_config();

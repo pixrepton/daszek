@@ -644,8 +644,9 @@ function daszek_api_v2_append_action_decision(WP_REST_Request $request, $decisio
     $proposal_id = sanitize_text_field($request->get_param('id'));
     $reason = isset($payload['reason']) ? sanitize_textarea_field($payload['reason']) : '';
     $actor = daszek_current_user();
+    $queue_id = 'bq_' . substr(hash('sha256', $proposal_id . '|' . $decision), 0, 24);
     $row = [
-        'queue_id' => 'bq_' . substr(hash('sha256', $proposal_id . '|' . $decision . '|' . microtime(true)), 0, 24),
+        'queue_id' => $queue_id,
         'schema_version' => 'daszek_bridge_queue.v1',
         'domain' => 'action_decision',
         'bridge_status' => 'pending',
@@ -658,7 +659,7 @@ function daszek_api_v2_append_action_decision(WP_REST_Request $request, $decisio
     if (!daszek_v2_append_jsonl_store('bridge_queue', $row)) {
         return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
     }
-    return ['ok' => true, 'queued' => $row];
+    return ['ok' => true, 'decision_key' => $queue_id, 'decision_status' => 'accepted', 'queued' => $row];
 }
 
 function daszek_api_v2_agent_hitl_request_payload(WP_REST_Request $request) {
@@ -792,9 +793,10 @@ function daszek_api_v2_agent_hitl_send(WP_REST_Request $request) {
     if (is_wp_error($parsed)) {
         return $parsed;
     }
+    $queue_id = 'bq_' . substr(hash('sha256', $parsed['engagement_id'] . '|send|' . $parsed['action_id']), 0, 24);
 
     $row = [
-        'queue_id' => 'bq_' . substr(hash('sha256', $parsed['engagement_id'] . '|send|' . microtime(true)), 0, 24),
+        'queue_id' => $queue_id,
         'schema_version' => 'daszek_bridge_queue.v1',
         'domain' => 'agent_hitl',
         'adjudication_kind' => 'hitl_action_execute',
@@ -809,7 +811,7 @@ function daszek_api_v2_agent_hitl_send(WP_REST_Request $request) {
     if (!daszek_v2_append_jsonl_store('bridge_queue', $row)) {
         return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
     }
-    return ['ok' => true, 'queued' => $row];
+    return ['ok' => true, 'decision_key' => $queue_id, 'decision_status' => 'accepted', 'queued' => $row];
 }
 
 function daszek_api_v2_note_feedback(WP_REST_Request $request) {
