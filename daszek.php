@@ -29,6 +29,25 @@ require_once DASZEK_PLUGIN_DIR . 'includes/proxy-agent-chat.php';
 /**
  * Aktywacja wtyczki
  */
+function daszek_reconcile_cron_schedule() {
+    if (!wp_next_scheduled('daszek_daily_backup')) {
+        wp_schedule_event(time(), 'daily', 'daszek_daily_backup');
+    }
+
+    if (!wp_next_scheduled('daszek_bridge_queue_gc')) {
+        wp_schedule_event(time(), 'daily', 'daszek_bridge_queue_gc');
+    }
+
+    $config = daszek_get_config();
+    if (!empty($config['mail_ingest'])) {
+        if (!wp_next_scheduled('daszek_mail_ingest')) {
+            wp_schedule_event(time(), 'daszek_5min', 'daszek_mail_ingest');
+        }
+    } else {
+        wp_clear_scheduled_hook('daszek_mail_ingest');
+    }
+}
+
 function daszek_activate() {
     if (!file_exists(DASZEK_DATA_DIR)) {
         wp_mkdir_p(DASZEK_DATA_DIR);
@@ -46,23 +65,7 @@ function daszek_activate() {
     if (!file_exists($htaccess_file)) {
         file_put_contents($htaccess_file, "Deny from all\nOptions -Indexes\n");
     }
-
-    if (!wp_next_scheduled('daszek_daily_backup')) {
-        wp_schedule_event(time(), 'daily', 'daszek_daily_backup');
-    }
-
-    if (!wp_next_scheduled('daszek_bridge_queue_gc')) {
-        wp_schedule_event(time(), 'daily', 'daszek_bridge_queue_gc');
-    }
-
-    $config = daszek_get_config();
-    if (!empty($config['mail_ingest'])) {
-        if (!wp_next_scheduled('daszek_mail_ingest')) {
-            wp_schedule_event(time(), 'daszek_5min', 'daszek_mail_ingest');
-        }
-    } else {
-        wp_clear_scheduled_hook('daszek_mail_ingest');
-    }
+    daszek_reconcile_cron_schedule();
 }
 
 register_activation_hook(__FILE__, function() {
@@ -95,6 +98,7 @@ function daszek_cron_schedules($schedules) {
 }
 
 add_filter('cron_schedules', 'daszek_cron_schedules');
+add_action('init', 'daszek_reconcile_cron_schedule', 20);
 
 /**
  * Rejestracja REST API endpoints

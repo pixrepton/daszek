@@ -103,6 +103,7 @@ function daszek_api_v3_system_bridge_queue_summary(WP_REST_Request $request) {
     $pending = daszek_v2_bridge_queue_pending_rows($rows);
     $oldest_created_at = '';
     $domain_breakdown = [];
+    $status_counts = daszek_v2_bridge_queue_status_counts($rows);
     $stuck_threshold = time() - (24 * 3600);
     $stuck_count = 0;
 
@@ -131,6 +132,10 @@ function daszek_api_v3_system_bridge_queue_summary(WP_REST_Request $request) {
         'ok' => true,
         'schema_version' => 'daszek_bridge_queue_summary.v1',
         'pending_count' => count($pending),
+        'retry_count' => $status_counts['retry'],
+        'failed_count' => $status_counts['failed'],
+        'dead_letter_count' => $status_counts['dead_letter'],
+        'actionable_count' => count($pending),
         'oldest_created_at' => $oldest_created_at,
         'stuck_count' => $stuck_count,
         'domain_breakdown' => $domain_breakdown,
@@ -940,15 +945,77 @@ function daszek_v2_bridge_queue_completion_ids($rows) {
         }
         $queue_id = isset($row['queue_id']) ? sanitize_text_field($row['queue_id']) : '';
         $status = isset($row['bridge_status']) ? strtolower(sanitize_text_field($row['bridge_status'])) : '';
-        if ($queue_id !== '' && in_array($status, ['completed', 'failed', 'skipped'], true)) {
+        if ($queue_id !== '' && in_array($status, ['completed', 'failed', 'skipped', 'dead_letter'], true)) {
             $done[$queue_id] = true;
         }
     }
     return $done;
 }
 
+function daszek_v2_bridge_queue_latest_rows($rows) {
+    $latest = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $queue_id = isset($row['queue_id']) ? sanitize_text_field($row['queue_id']) : '';
+        if ($queue_id === '') {
+            continue;
+        }
+        $latest[$queue_id] = $row;
+    }
+    return $latest;
+}
+
+function daszek_v2_bridge_queue_retry_due($row) {
+    if (!is_array($row)) {
+        return false;
+    }
+    $next_retry_at = isset($row['next_retry_at']) ? sanitize_text_field($row['next_retry_at']) : '';
+    if ($next_retry_at === '') {
+        return true;
+    }
+    $ts = strtotime($next_retry_at);
+    if ($ts === false) {
+        return true;
+    }
+    return $ts <= time();
+}
+
+function daszek_v2_bridge_queue_merge_status($base_row, $status_row) {
+    $merged = is_array($base_row) ? $base_row : [];
+    foreach (['bridge_status', 'bridge_error', 'retry_count', 'next_retry_at', 'retryable'] as $key) {
+        if (isset($status_row[$key]) && $status_row[$key] !== '') {
+            $merged[$key] = $status_row[$key];
+        }
+    }
+    return $merged;
+}
+
+function daszek_v2_bridge_queue_status_counts($rows) {
+    $counts = [
+        'pending' => 0,
+        'retry' => 0,
+        'failed' => 0,
+        'dead_letter' => 0,
+        'completed' => 0,
+        'skipped' => 0,
+    ];
+    foreach (daszek_v2_bridge_queue_latest_rows($rows) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $status = isset($row['bridge_status']) ? strtolower(sanitize_text_field($row['bridge_status'])) : 'pending';
+        if (!isset($counts[$status])) {
+            continue;
+        }
+        $counts[$status]++;
+    }
+    return $counts;
+}
+
 function daszek_v2_bridge_queue_pending_rows($rows) {
-    $completed = daszek_v2_bridge_queue_completion_ids($rows);
+    $latest = daszek_v2_bridge_queue_latest_rows($rows);
     $seen = [];
     $pending = [];
 
@@ -958,7 +1025,7 @@ function daszek_v2_bridge_queue_pending_rows($rows) {
         }
 
         $queue_id = isset($row['queue_id']) ? sanitize_text_field($row['queue_id']) : '';
-        if ($queue_id === '' || isset($seen[$queue_id]) || isset($completed[$queue_id])) {
+        if ($queue_id === '' || isset($seen[$queue_id])) {
             continue;
         }
         if (($row['schema_version'] ?? '') !== 'daszek_bridge_queue.v1') {
@@ -982,12 +1049,19 @@ function daszek_v2_bridge_queue_pending_rows($rows) {
             }
         }
 
-        $status = isset($row['bridge_status']) ? strtolower(sanitize_text_field($row['bridge_status'])) : 'pending';
-        if ($status !== 'pending') {
+        $status_row = isset($latest[$queue_id]) && is_array($latest[$queue_id]) ? $latest[$queue_id] : $row;
+        $status = isset($status_row['bridge_status']) ? strtolower(sanitize_text_field($status_row['bridge_status'])) : 'pending';
+        if (in_array($status, ['completed', 'failed', 'skipped', 'dead_letter'], true)) {
+            continue;
+        }
+        if (!in_array($status, ['pending', 'retry'], true)) {
+            continue;
+        }
+        if ($status === 'retry' && !daszek_v2_bridge_queue_retry_due($status_row)) {
             continue;
         }
 
-        $pending[] = $row;
+        $pending[] = daszek_v2_bridge_queue_merge_status($row, $status_row);
         $seen[$queue_id] = true;
     }
 
@@ -1007,12 +1081,27 @@ function daszek_api_v2_bridge_queue(WP_REST_Request $request) {
     $limit = min($limit, 100);
 
     $rows = daszek_v2_load_jsonl_store('bridge_queue');
-    $items = $status === 'all' ? $rows : daszek_v2_bridge_queue_pending_rows($rows);
+    if ($status === 'all') {
+        $items = $rows;
+    } elseif ($status === 'pending' || $status === 'actionable') {
+        $items = daszek_v2_bridge_queue_pending_rows($rows);
+    } else {
+        $items = [];
+        foreach (daszek_v2_bridge_queue_latest_rows($rows) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $row_status = isset($row['bridge_status']) ? strtolower(sanitize_text_field($row['bridge_status'])) : 'pending';
+            if ($row_status === $status) {
+                $items[] = $row;
+            }
+        }
+    }
 
     return [
         'ok' => true,
         'schema_version' => 'daszek_bridge_queue_api.v1',
-        'status' => $status === 'all' ? 'all' : 'pending',
+        'status' => $status === 'all' ? 'all' : $status,
         'total_rows' => count($rows),
         'pending_count' => count(daszek_v2_bridge_queue_pending_rows($rows)),
         'limit' => $limit,
@@ -1035,17 +1124,30 @@ function daszek_api_v2_bridge_queue_complete(WP_REST_Request $request) {
     if ($queue_id === '') {
         return new WP_Error('invalid_payload', 'queue_id is required.', ['status' => 400]);
     }
-    if (!in_array($status, ['completed', 'failed', 'skipped'], true)) {
+    if (!in_array($status, ['completed', 'failed', 'skipped', 'retry', 'dead_letter'], true)) {
         return new WP_Error('invalid_payload', 'Unsupported bridge_status.', ['status' => 400]);
     }
 
+    $bridge_error = isset($payload['bridge_error']) ? substr(sanitize_textarea_field($payload['bridge_error']), 0, 4000) : '';
+    $error_payload = json_decode($bridge_error, true);
     $row = [
         'queue_id' => $queue_id,
         'schema_version' => 'daszek_bridge_queue.v1',
         'bridge_status' => $status,
-        'bridge_error' => isset($payload['bridge_error']) ? substr(sanitize_textarea_field($payload['bridge_error']), 0, 4000) : '',
+        'bridge_error' => $bridge_error,
         'bridge_completed_at' => gmdate('c'),
     ];
+    if (is_array($error_payload)) {
+        if (isset($error_payload['retry_count'])) {
+            $row['retry_count'] = max(0, intval($error_payload['retry_count']));
+        }
+        if (!empty($error_payload['next_retry_at'])) {
+            $row['next_retry_at'] = sanitize_text_field((string) $error_payload['next_retry_at']);
+        }
+        if (array_key_exists('retryable', $error_payload)) {
+            $row['retryable'] = (bool) $error_payload['retryable'];
+        }
+    }
 
     if (!daszek_v2_append_jsonl_store('bridge_queue', $row)) {
         return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
