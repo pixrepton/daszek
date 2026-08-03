@@ -3527,9 +3527,11 @@ function renderSystemObservabilityDashboard() {
     const riskClass = riskCount > 0 ? 'is-warning' : 'is-ok';
     const bridge = obs.bridgeSummary && typeof obs.bridgeSummary === 'object' ? obs.bridgeSummary : {};
     const bridgePending = bridge.pending_count != null ? Number(bridge.pending_count) : 0;
+    const bridgeRetry = bridge.retry_count != null ? Number(bridge.retry_count) : 0;
+    const bridgeDeadLetter = bridge.dead_letter_count != null ? Number(bridge.dead_letter_count) : 0;
     const bridgeOldest = bridge.oldest_created_at ? humanizeAge(bridge.oldest_created_at) : '—';
     const bridgeStuck = bridge.stuck_count != null ? Number(bridge.stuck_count) : 0;
-    const bridgeClass = bridgeStuck > 0 ? 'is-warning' : (bridgePending > 0 ? 'is-muted' : 'is-ok');
+    const bridgeClass = (bridgeStuck > 0 || bridgeDeadLetter > 0) ? 'is-warning' : ((bridgePending + bridgeRetry) > 0 ? 'is-muted' : 'is-ok');
     const healthErr = healthBundle.loadError ? `<p class="error-inline" role="alert">${escapeHtml(healthBundle.loadError)}</p>` : '';
     const obsErr = obs.loadError ? `<p class="error-inline" role="alert">${escapeHtml(obs.loadError)}</p>` : '';
     return `
@@ -3551,8 +3553,8 @@ function renderSystemObservabilityDashboard() {
                 </article>
                 <article class="system-obs-card ${bridgeClass}">
                     <h4>Bridge queue</h4>
-                    <p class="system-obs-value">${bridgePending} pending</p>
-                    <p class="detail-muted">Najstarszy: ${escapeHtml(bridgeOldest)}${bridgeStuck > 0 ? ` · ${bridgeStuck} stuck` : ''}</p>
+                    <p class="system-obs-value">${bridgePending} actionable</p>
+                    <p class="detail-muted">Retry: ${bridgeRetry} · Dead-letter: ${bridgeDeadLetter}${bridgeStuck > 0 ? ` · ${bridgeStuck} stuck` : ''} · Najstarszy: ${escapeHtml(bridgeOldest)}</p>
                 </article>
                 <article class="system-obs-card ${riskClass}">
                     <h4>Risk flags</h4>
@@ -4459,9 +4461,7 @@ function renderHitlOperatorActions(caseItem, payload) {
         : `<p class="detail-muted">Brak gotowego draftu — decyzja należy do Ciebie. Asystent zebrał kontekst sprawy.</p>
            ${asks.length ? `<ul class="ds-ask">${asks.map(q => `<li>${escapeHtml(String(q))}</li>`).join('')}</ul>` : ''}`;
     // Oś: odpowiedź do klienta. "Wyślij" = realna odpowiedź (primary). "Zatwierdź bez wysyłki" = akceptacja planu agenta.
-    const primaryAction = hasDraft
-        ? `<button type="button" class="btn btn-primary" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Wyslij ta odpowiedz do klienta">Wyslij odpowiedz</button>`
-        : `<button type="button" class="btn btn-primary" disabled data-tooltip="Najpierw potrzebny jest draft odpowiedzi">Wyslij odpowiedz (brak draftu)</button>`;
+    const primaryAction = '';
     return `
         <section class="detail-section detail-section-actions detail-section-reply">
             <h3>Odpowiedź do klienta</h3>
@@ -4510,18 +4510,12 @@ renderHitlOperatorActions = function(caseItem, payload, options = {}) {
            <textarea id="ds-hitl-draft" class="ds-draft" data-hitl-draft rows="8" ${requestPending ? 'disabled' : ''}>${escapeHtml(draft)}</textarea>`
         : `<p class="detail-muted">Brak gotowego draftu - decyzja nalezy do Ciebie. Asystent zebral kontekst sprawy.</p>
            ${asks.length ? `<ul class="ds-ask">${asks.map(q => `<li>${escapeHtml(String(q))}</li>`).join('')}</ul>` : ''}`;
-    const primaryAction = approveOnly
-        ? ''
-        : (
-            hasDraft
-                ? `<button type="button" class="btn btn-primary" data-hitl-send="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-note="${escapeHtml(noteId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Wyslij ta odpowiedz do klienta" ${requestPending ? 'disabled' : ''}>${sendPending ? 'Wysylam...' : 'Wyslij odpowiedz'}</button>`
-                : `<button type="button" class="btn btn-primary" disabled data-tooltip="Najpierw potrzebny jest draft odpowiedzi">Wyslij odpowiedz (brak draftu)</button>`
-        );
-    const approveLabel = approvePending ? 'Zatwierdzam...' : 'Zatwierdz bez wysylki';
-    const sectionTitle = approveOnly ? 'Decyzja operatora' : 'Odpowiedz do klienta';
+    const primaryAction = '';
+    const approveLabel = approvePending ? 'Zatwierdzam...' : 'Zatwierdz do recznej wysylki';
+    const sectionTitle = approveOnly ? 'Decyzja operatora' : 'Szkic odpowiedzi dla operatora';
     const sectionLead = approveOnly
         ? 'Zatwierdzenie zapisze decyzje HITL w Node B bez wysylki maila.'
-        : 'Nic nie wychodzi bez Twojego klikniecia. Przejrzyj, popraw i wyslij.';
+        : 'Node B nie wysyla wiadomosci. Przejrzyj tekst, popraw go i zatwierdz do recznej wysylki poza systemem.';
     return `
         <section class="detail-section detail-section-actions detail-section-reply">
             <h3>${sectionTitle}</h3>
@@ -5752,13 +5746,17 @@ async function submitHitlAgentAction(trigger, kind) {
         showError('Brak engagement_id — odśwież szczegóły sprawy.');
         return;
     }
+    if (kind === 'send') {
+        showError('Node B ma Gmail read-only. Zatwierdz szkic do recznej wysylki zamiast uruchamiac send.');
+        return;
+    }
     const draftEl = document.querySelector('[data-hitl-draft]');
     const draftText = draftEl ? String(draftEl.value || '').trim() : '';
     if (kind === 'send' && !draftText) {
         showError('Brak treści draftu do wysłania — najpierw wygeneruj lub uzupełnij draft.');
         return;
     }
-    const endpoint = kind === 'send' ? '/agent-hitl/send' : '/agent-hitl/approve';
+    const endpoint = '/agent-hitl/approve';
     try {
         await apiFetch(V2_API_BASE, endpoint, {
             method: 'POST',
@@ -5801,13 +5799,17 @@ submitHitlAgentAction = async function(trigger, kind) {
     ) {
         return;
     }
+    if (kind === 'send') {
+        showError('Node B ma Gmail read-only. Zatwierdz szkic do recznej wysylki zamiast uruchamiac send.');
+        return;
+    }
     const draftEl = document.querySelector('[data-hitl-draft]');
     const draftText = draftEl ? String(draftEl.value || '').trim() : '';
     if (kind === 'send' && !draftText) {
         showError('Brak tresci draftu do wyslania - najpierw wygeneruj lub uzupelnij draft.');
         return;
     }
-    const endpoint = kind === 'send' ? '/agent-hitl/send' : '/agent-hitl/approve';
+    const endpoint = '/agent-hitl/approve';
     state.hitlAction = {
         pending: true,
         awaitingSync: false,
@@ -5840,8 +5842,20 @@ submitHitlAgentAction = async function(trigger, kind) {
             noteId,
             decisionKey,
             status: String((response && response.decision_status) || 'accepted').trim() || 'accepted',
+            executionStatus: String((response && response.execution_status) || '').trim().toLowerCase(),
+            deliveryMode: String((response && response.delivery_mode) || '').trim().toLowerCase(),
+            effectStarted: Boolean(response && response.effect_started),
         };
-        showToast('Przyjeto do realizacji. Czekam na potwierdzenie w feedzie.');
+        if (
+            state.hitlAction.status === 'approved'
+            && state.hitlAction.executionStatus === 'not_applicable'
+            && state.hitlAction.deliveryMode === 'manual_operator'
+            && state.hitlAction.effectStarted === false
+        ) {
+            showToast('Szkic zatwierdzony do recznej wysylki. Czekam na potwierdzenie w feedzie.');
+        } else {
+            showToast('Przyjeto do realizacji. Czekam na potwierdzenie w feedzie.');
+        }
         await loadAllData();
         if (caseId) {
             await openCaseDetail(caseId);
@@ -5862,7 +5876,7 @@ submitHitlAgentAction = async function(trigger, kind) {
             if (convergence.status === 'executed') {
                 showToast('Wykonanie potwierdzone w aktualnym feedzie.');
             } else if (convergence.status === 'approved') {
-                showToast('Zatwierdzenie potwierdzone w aktualnym feedzie.');
+                showToast('Zatwierdzenie do recznej wysylki potwierdzone w aktualnym feedzie.');
             }
         } else if (convergence.status === 'outcome_unknown') {
             state.hitlAction.status = 'outcome_unknown';

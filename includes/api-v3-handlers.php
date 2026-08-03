@@ -782,41 +782,11 @@ function daszek_api_v2_engagement_materialize_approve(WP_REST_Request $request) 
 }
 
 function daszek_api_v2_agent_hitl_send(WP_REST_Request $request) {
-    $csrf_check = daszek_check_csrf($request);
-    if (is_wp_error($csrf_check)) {
-        return $csrf_check;
-    }
-    $owner_check = daszek_api_v2_require_owner();
-    if (is_wp_error($owner_check)) {
-        return $owner_check;
-    }
-    if (!daszek_v2_bootstrap_storage()) {
-        return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
-    }
-
-    $parsed = daszek_api_v2_agent_hitl_request_payload($request);
-    if (is_wp_error($parsed)) {
-        return $parsed;
-    }
-    $queue_id = 'bq_' . substr(hash('sha256', $parsed['engagement_id'] . '|send|' . $parsed['action_id']), 0, 24);
-
-    $row = [
-        'queue_id' => $queue_id,
-        'schema_version' => 'daszek_bridge_queue.v1',
-        'domain' => 'agent_hitl',
-        'adjudication_kind' => 'hitl_action_execute',
-        'bridge_status' => 'pending',
-        'engagement_id' => $parsed['engagement_id'],
-        'case_id' => $parsed['case_id'],
-        'action_id' => $parsed['action_id'],
-        'operator_id' => $parsed['operator_id'],
-        'operator_draft_pl' => $parsed['draft_pl'],
-        'created_at' => gmdate('c'),
-    ];
-    if (!daszek_v2_append_jsonl_store('bridge_queue', $row)) {
-        return new WP_Error('storage_error', daszek_v2_storage_error_message(), ['status' => 500]);
-    }
-    return ['ok' => true, 'decision_key' => $queue_id, 'decision_status' => 'accepted', 'queued' => $row];
+    return new WP_Error(
+        'agent_hitl_send_disabled',
+        'Node B ma Gmail read-only. Zatwierdz szkic do recznej wysylki przez operatora.',
+        ['status' => 410]
+    );
 }
 
 function daszek_api_v2_note_feedback(WP_REST_Request $request) {

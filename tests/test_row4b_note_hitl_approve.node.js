@@ -167,7 +167,7 @@ test('staging note HITL approve renders in approve-only mode without send action
   );
 
   assert.match(html, /data-hitl-approve="stg_sig_de445bdb"/);
-  assert.match(html, /Zatwierdz bez wysylki/);
+  assert.match(html, /Zatwierdz/);
   assert.doesNotMatch(html, /data-hitl-send=/);
 });
 
@@ -266,7 +266,14 @@ test('approve click stays in accepted state until feed convergence is confirmed'
   const { context, calls } = buildContext({
     apiFetch: (...args) => {
       calls.apiFetch.push(args);
-      return Promise.resolve({ ok: true, decision_key: 'bq_hitl_accept_1', decision_status: 'accepted' });
+      return Promise.resolve({
+        ok: true,
+        decision_key: 'bq_hitl_accept_1',
+        decision_status: 'approved',
+        execution_status: 'not_applicable',
+        delivery_mode: 'manual_operator',
+        effect_started: false,
+      });
     },
   });
   loadFunctions(context, ['submitHitlAgentAction']);
@@ -287,7 +294,7 @@ test('approve click stays in accepted state until feed convergence is confirmed'
   assert.doesNotMatch(calls.showToast[0], /HITL zatwierdzone|wykonano/i);
 });
 
-test('send click does not show final success before convergence', async () => {
+test('send click is blocked because Node B is read-only for Gmail', async () => {
   const { context, calls } = buildContext({
     document: {
       querySelector(selector) {
@@ -316,15 +323,23 @@ test('send click does not show final success before convergence', async () => {
 
   await context.submitHitlAgentAction(trigger, 'send');
 
-  assert.ok(calls.showToast.length >= 1);
-  assert.doesNotMatch(calls.showToast[0], /Wysylka zapisana w kolejce bridge|wyslano|wykonano/i);
+  assert.strictEqual(calls.apiFetch.length, 0);
+  assert.ok(calls.showError[0]);
+  assert.match(calls.showError[0], /read-only|recznej wysylki/i);
 });
 
 test('approve click shows final confirmation only after converged feed refresh', async () => {
   const { context, calls } = buildContext({
     apiFetch: (...args) => {
       calls.apiFetch.push(args);
-      return Promise.resolve({ ok: true, decision_key: 'bq_hitl_accept_2', decision_status: 'accepted' });
+      return Promise.resolve({
+        ok: true,
+        decision_key: 'bq_hitl_accept_2',
+        decision_status: 'approved',
+        execution_status: 'not_applicable',
+        delivery_mode: 'manual_operator',
+        effect_started: false,
+      });
     },
     openNoteDetail: async (noteId) => {
       calls.openNoteDetail.push(noteId);
@@ -356,11 +371,11 @@ test('approve click shows final confirmation only after converged feed refresh',
 
   await context.submitHitlAgentAction(trigger, 'approve');
 
-  assert.match(calls.showToast[0], /Przyjeto do realizacji/i);
-  assert.match(calls.showToast[1] || '', /potwierdzone w aktualnym feedzie/i);
+  assert.match(calls.showToast[0], /recznej wysylki/i);
+  assert.match(calls.showToast[1] || '', /recznej wysylki potwierdzone/i);
 });
 
-test('send click shows final confirmation only after converged feed refresh', async () => {
+test('send click never enters convergence path when Gmail send is disabled', async () => {
   const { context, calls } = buildContext({
     document: {
       querySelector(selector) {
@@ -416,11 +431,12 @@ test('send click shows final confirmation only after converged feed refresh', as
 
   await context.submitHitlAgentAction(trigger, 'send');
 
-  assert.match(calls.showToast[0], /Przyjeto do realizacji/i);
-  assert.match(calls.showToast[1] || '', /Wykonanie potwierdzone w aktualnym feedzie/i);
+  assert.strictEqual(calls.apiFetch.length, 0);
+  assert.ok(calls.showError[0]);
+  assert.match(calls.showError[0], /read-only|recznej wysylki/i);
 });
 
-test('duplicate send click is blocked while awaiting feed convergence', async () => {
+test('duplicate send click stays locally blocked when Gmail send is disabled', async () => {
   const { context, calls } = buildContext({
     document: {
       querySelector(selector) {
@@ -450,7 +466,8 @@ test('duplicate send click is blocked while awaiting feed convergence', async ()
   await context.submitHitlAgentAction(trigger, 'send');
   await context.submitHitlAgentAction(trigger, 'send');
 
-  assert.strictEqual(calls.apiFetch.length, 1);
+  assert.strictEqual(calls.apiFetch.length, 0);
+  assert.strictEqual(calls.showError.length, 2);
 });
 
 test('duplicate approve click is blocked while request is pending', async () => {
