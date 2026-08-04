@@ -262,6 +262,133 @@ test('approve click uses canonical endpoint without case_id and refreshes note d
   assert.deepStrictEqual(calls.openNoteDetail, ['desk-stg_sig_de445bdb']);
 });
 
+test('preview identity fields are rendered into HITL data attributes', () => {
+  const { context } = buildContext();
+  loadFunctions(context, ['renderHitlOperatorActions']);
+
+  const html = context.renderHitlOperatorActions(
+    {
+      note_id: 'desk-eng_int04',
+      engagement_id: 'eng_int04',
+      case_id: 'case_recovery_INT-04',
+      hitl_required: true,
+      hitl_action_id: 'draft_reply',
+      draft_reply_pl: 'Dzien dobry, prosze o metraz.',
+      draft_id: 'draft_abc123',
+      body_hash: 'deadbeefcafebabe',
+      revision: 1,
+    },
+    {
+      engagement_id: 'eng_int04',
+      hitl_gate: { required: true },
+      draft_id: 'draft_abc123',
+      body_hash: 'deadbeefcafebabe',
+      revision: 1,
+    },
+    { approveOnly: true }
+  );
+
+  assert.match(html, /data-hitl-draft-id="draft_abc123"/);
+  assert.match(html, /data-hitl-body-hash="deadbeefcafebabe"/);
+  assert.match(html, /data-hitl-revision="1"/);
+  assert.match(html, /data-hitl-draft/);
+});
+
+test('approve sends expected_body_hash of the previewed revision, not a rehash of edits', async () => {
+  const { context, calls } = buildContext({
+    document: {
+      querySelector(selector) {
+        if (selector === '[data-hitl-draft]') {
+          return {
+            value: 'Edytowany tekst operatora',
+            dataset: {
+              hitlBodyHash: 'previewhash000001',
+              hitlRevision: '1',
+              hitlDraftId: 'draft_preview_1',
+            },
+          };
+        }
+        return null;
+      },
+    },
+  });
+  loadFunctions(context, ['submitHitlAgentAction']);
+
+  const trigger = {
+    dataset: {
+      hitlApprove: 'eng_int04',
+      hitlCase: 'case_recovery_INT-04',
+      hitlAction: 'draft_reply',
+      hitlNote: 'desk-eng_int04',
+      hitlBodyHash: 'previewhash000001',
+      hitlRevision: '1',
+      hitlDraftId: 'draft_preview_1',
+    },
+    disabled: false,
+  };
+
+  await context.submitHitlAgentAction(trigger, 'approve');
+
+  assert.strictEqual(calls.apiFetch.length, 1);
+  const body = JSON.parse(calls.apiFetch[0][2].body);
+  assert.strictEqual(body.draft_pl, 'Edytowany tekst operatora');
+  assert.strictEqual(body.expected_body_hash, 'previewhash000001');
+  assert.strictEqual(body.expected_revision, 1);
+  assert.strictEqual(body.draft_id, 'draft_preview_1');
+  assert.ok(!Object.prototype.hasOwnProperty.call(body, 'send'));
+});
+
+test('stale body_hash rejection refreshes draft and informs the operator; no send', async () => {
+  const { context, calls } = buildContext({
+    document: {
+      querySelector(selector) {
+        if (selector === '[data-hitl-draft]') {
+          return {
+            value: 'stary widok',
+            dataset: {
+              hitlBodyHash: 'oldhash0000000001',
+              hitlRevision: '1',
+              hitlDraftId: 'draft_stale',
+            },
+          };
+        }
+        return null;
+      },
+    },
+    apiFetch: (...args) => {
+      calls.apiFetch.push(args);
+      const err = new Error(
+        "body_hash mismatch for action_id 'draft_reply': expected 'oldhash0000000001', current is 'newhash0000000002' (revision 2) — stale draft, refetch before approving"
+      );
+      err.status = 409;
+      return Promise.reject(err);
+    },
+  });
+  loadFunctions(context, ['submitHitlAgentAction']);
+
+  const trigger = {
+    dataset: {
+      hitlApprove: 'eng_stale',
+      hitlCase: 'case_stale',
+      hitlAction: 'draft_reply',
+      hitlNote: 'desk-eng_stale',
+      hitlBodyHash: 'oldhash0000000001',
+      hitlRevision: '1',
+      hitlDraftId: 'draft_stale',
+    },
+    disabled: false,
+  };
+
+  await context.submitHitlAgentAction(trigger, 'approve');
+
+  assert.strictEqual(calls.apiFetch.length, 1);
+  assert.strictEqual(calls.loadAllData, 1);
+  assert.deepStrictEqual(calls.openCaseDetail, ['case_stale']);
+  assert.ok(calls.showError[0]);
+  assert.match(calls.showError[0], /zmienila sie od czasu podgladu/i);
+  assert.doesNotMatch(JSON.stringify(calls.apiFetch), /\/agent-hitl\/send/);
+});
+
 test('approve click stays in accepted state until feed convergence is confirmed', async () => {
   const { context, calls } = buildContext({
     apiFetch: (...args) => {

@@ -687,12 +687,25 @@ function daszek_api_v2_agent_hitl_request_payload(WP_REST_Request $request) {
         $operator_id = is_string($actor) ? sanitize_text_field($actor) : 'operator';
     }
     $draft_pl = isset($payload['draft_pl']) ? sanitize_textarea_field($payload['draft_pl']) : '';
+    // AI-OS-DASZEK-STALE-VIEW-BINDING-01: bind approval to the previewed draft version.
+    // expected_body_hash is the hash of the body the operator SAW (not the edited textarea).
+    $expected_body_hash = isset($payload['expected_body_hash'])
+        ? sanitize_text_field((string) $payload['expected_body_hash'])
+        : '';
+    $expected_revision = 0;
+    if (isset($payload['expected_revision']) && is_numeric($payload['expected_revision'])) {
+        $expected_revision = max(0, (int) $payload['expected_revision']);
+    }
+    $draft_id = isset($payload['draft_id']) ? sanitize_text_field((string) $payload['draft_id']) : '';
     return [
         'engagement_id' => $engagement_id,
         'action_id' => $action_id,
         'case_id' => $case_id,
         'operator_id' => $operator_id,
         'draft_pl' => $draft_pl,
+        'expected_body_hash' => $expected_body_hash,
+        'expected_revision' => $expected_revision,
+        'draft_id' => $draft_id,
     ];
 }
 
@@ -711,22 +724,59 @@ function daszek_api_v2_agent_hitl_approve(WP_REST_Request $request) {
         return $parsed;
     }
 
+    $node_b_body = [
+        'action_id' => $parsed['action_id'],
+        'operator_id' => $parsed['operator_id'],
+        'case_id' => $parsed['case_id'],
+        'operator_draft_pl' => $parsed['draft_pl'],
+    ];
+    if ($parsed['expected_body_hash'] !== '') {
+        $node_b_body['expected_body_hash'] = $parsed['expected_body_hash'];
+    }
+    if (!empty($parsed['expected_revision'])) {
+        $node_b_body['expected_revision'] = (int) $parsed['expected_revision'];
+    }
+    if ($parsed['draft_id'] !== '') {
+        $node_b_body['draft_id'] = $parsed['draft_id'];
+    }
+
     $result = daszek_node_b_get_json(
         '/engagements/' . rawurlencode($parsed['engagement_id']) . '/hitl/approve',
         'POST',
-        [
-            'action_id' => $parsed['action_id'],
-            'operator_id' => $parsed['operator_id'],
-            'case_id' => $parsed['case_id'],
-            'operator_draft_pl' => $parsed['draft_pl'],
-        ]
+        $node_b_body
     );
     if (is_wp_error($result)) {
+        $data = $result->get_error_data();
+        $body = (is_array($data) && isset($data['body']) && is_array($data['body'])) ? $data['body'] : [];
+        $detail = '';
+        if (isset($body['detail']) && is_string($body['detail'])) {
+            $detail = $body['detail'];
+        } elseif (isset($body['error']) && is_string($body['error'])) {
+            $detail = $body['error'];
+        }
+        if ($detail !== '') {
+            $status = isset($data['status']) ? (int) $data['status'] : 409;
+            $is_stale = (strpos($detail, 'body_hash mismatch') !== false)
+                || (strpos($detail, 'revision mismatch') !== false)
+                || (strpos($detail, 'stale draft') !== false);
+            return new WP_Error(
+                $is_stale ? 'hitl_stale_draft' : $result->get_error_code(),
+                sanitize_text_field($detail),
+                ['status' => $status > 0 ? $status : 409, 'detail' => $body]
+            );
+        }
         return $result;
     }
     if (empty($result['ok'])) {
         $message = isset($result['error']) ? sanitize_text_field((string) $result['error']) : 'Node B odrzucil HITL approve.';
-        return new WP_Error('hitl_approve_failed', $message, ['status' => 502, 'detail' => $result]);
+        $is_stale = (strpos($message, 'body_hash mismatch') !== false)
+            || (strpos($message, 'revision mismatch') !== false)
+            || (strpos($message, 'stale draft') !== false);
+        return new WP_Error(
+            $is_stale ? 'hitl_stale_draft' : 'hitl_approve_failed',
+            $message,
+            ['status' => $is_stale ? 409 : 502, 'detail' => $result]
+        );
     }
     return $result;
 }

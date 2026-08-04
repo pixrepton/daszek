@@ -21,3 +21,13 @@ def test_hitl_approve_click_handler_reuses_existing_submitter() -> None:
     source = APP_JS.read_text(encoding="utf-8")
 
     assert "void submitHitlAgentAction(hitlApprove, 'approve');" in source
+
+
+def test_hitl_approve_payload_binds_expected_body_hash() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert "expected_body_hash" in source
+    assert "data-hitl-body-hash" in source
+    assert "data-hitl-revision" in source
+    assert "data-hitl-draft-id" in source
+    assert "Tresc szkicu zmienila sie od czasu podgladu" in source

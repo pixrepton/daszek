@@ -4494,6 +4494,12 @@ renderHitlOperatorActions = function(caseItem, payload, options = {}) {
     const noteId = String(row.note_id || '').trim();
     const actionId = String(row.hitl_action_id || (payload && payload.hitl_action_id) || 'draft_reply').trim();
     const draft = String(row.draft_reply_pl || (payload && payload.draft_reply_pl) || '').trim();
+    const draftId = String(row.draft_id || (payload && payload.draft_id) || '').trim();
+    const bodyHash = String(row.body_hash || (payload && payload.body_hash) || '').trim();
+    const revisionRaw = row.revision != null ? row.revision : (payload && payload.revision);
+    const revision = revisionRaw != null && String(revisionRaw).trim() !== ''
+        ? String(revisionRaw).trim()
+        : '';
     const hasDraft = draft.length > 0;
     const approveOnly = opts.approveOnly === true;
     const hitlRequest = state.hitlAction || {};
@@ -4505,9 +4511,14 @@ renderHitlOperatorActions = function(caseItem, payload, options = {}) {
     const asks = Array.isArray(row.operator_questions_pl)
         ? row.operator_questions_pl
         : (Array.isArray(payload && payload.operator_questions_pl) ? payload.operator_questions_pl : []);
+    const identityAttrs = [
+        draftId ? `data-hitl-draft-id="${escapeHtml(draftId)}"` : '',
+        bodyHash ? `data-hitl-body-hash="${escapeHtml(bodyHash)}"` : '',
+        revision ? `data-hitl-revision="${escapeHtml(revision)}"` : '',
+    ].filter(Boolean).join(' ');
     const draftBlock = hasDraft
         ? `<label class="ds-draft-label" for="ds-hitl-draft">Tresc odpowiedzi (mozesz edytowac przed wysylka)</label>
-           <textarea id="ds-hitl-draft" class="ds-draft" data-hitl-draft rows="8" ${requestPending ? 'disabled' : ''}>${escapeHtml(draft)}</textarea>`
+           <textarea id="ds-hitl-draft" class="ds-draft" data-hitl-draft ${identityAttrs} rows="8" ${requestPending ? 'disabled' : ''}>${escapeHtml(draft)}</textarea>`
         : `<p class="detail-muted">Brak gotowego draftu - decyzja nalezy do Ciebie. Asystent zebral kontekst sprawy.</p>
            ${asks.length ? `<ul class="ds-ask">${asks.map(q => `<li>${escapeHtml(String(q))}</li>`).join('')}</ul>` : ''}`;
     const primaryAction = '';
@@ -4523,7 +4534,7 @@ renderHitlOperatorActions = function(caseItem, payload, options = {}) {
             ${draftBlock}
             <div class="hitl-actions">
                 ${primaryAction}
-                <button type="button" class="btn btn-ghost btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-note="${escapeHtml(noteId)}" data-hitl-action="${escapeHtml(actionId)}" data-tooltip="Zatwierdz plan agenta bez wysylki maila" ${requestPending ? 'disabled' : ''}>${approveLabel}</button>
+                <button type="button" class="btn btn-ghost btn-small" data-hitl-approve="${escapeHtml(engagementId)}" data-hitl-case="${escapeHtml(caseId)}" data-hitl-note="${escapeHtml(noteId)}" data-hitl-action="${escapeHtml(actionId)}" ${identityAttrs} data-tooltip="Zatwierdz plan agenta bez wysylki maila" ${requestPending ? 'disabled' : ''}>${approveLabel}</button>
             </div>
         </section>`;
 };
@@ -5809,6 +5820,23 @@ submitHitlAgentAction = async function(trigger, kind) {
         showError('Brak tresci draftu do wyslania - najpierw wygeneruj lub uzupelnij draft.');
         return;
     }
+    // Bind approve to the previewed revision: hash of what the operator SAW,
+    // not a re-hash of the (possibly edited) textarea contents.
+    const expectedBodyHash = String(
+        trigger.dataset.hitlBodyHash
+        || (draftEl && draftEl.dataset && draftEl.dataset.hitlBodyHash)
+        || ''
+    ).trim();
+    const expectedRevision = String(
+        trigger.dataset.hitlRevision
+        || (draftEl && draftEl.dataset && draftEl.dataset.hitlRevision)
+        || ''
+    ).trim();
+    const draftId = String(
+        trigger.dataset.hitlDraftId
+        || (draftEl && draftEl.dataset && draftEl.dataset.hitlDraftId)
+        || ''
+    ).trim();
     const endpoint = '/agent-hitl/approve';
     state.hitlAction = {
         pending: true,
@@ -5821,15 +5849,25 @@ submitHitlAgentAction = async function(trigger, kind) {
     };
     renderDetailPanel();
     try {
+        const requestBody = {
+            engagement_id: engagementId,
+            case_id: caseId,
+            action_id: actionId,
+            operator_id: state.currentUser || 'operator',
+            draft_pl: draftText,
+        };
+        if (expectedBodyHash) {
+            requestBody.expected_body_hash = expectedBodyHash;
+        }
+        if (expectedRevision) {
+            requestBody.expected_revision = Number(expectedRevision) || expectedRevision;
+        }
+        if (draftId) {
+            requestBody.draft_id = draftId;
+        }
         const response = await apiFetch(V2_API_BASE, endpoint, {
             method: 'POST',
-            body: JSON.stringify({
-                engagement_id: engagementId,
-                case_id: caseId,
-                action_id: actionId,
-                operator_id: state.currentUser || 'operator',
-                draft_pl: draftText,
-            }),
+            body: JSON.stringify(requestBody),
         });
         const decisionKey = String(
             (response && (response.decision_key || (response.queued && response.queued.queue_id))) || ''
@@ -5884,7 +5922,22 @@ submitHitlAgentAction = async function(trigger, kind) {
         }
     } catch (error) {
         state.hitlAction = { pending: false, awaitingSync: false, engagementId: '', kind: '', noteId: '', decisionKey: '', status: 'failed' };
-        if (Number(error.status || 0) === 409) {
+        const errMsg = String((error && error.message) || '');
+        const status = Number((error && error.status) || 0);
+        const isStaleView = /body_hash mismatch|revision mismatch|stale draft|hitl_stale/i.test(errMsg);
+        if (isStaleView) {
+            showError('Tresc szkicu zmienila sie od czasu podgladu. Odswiezam aktualna wersje — sprawdz ja i zatwierdz ponownie.');
+            await loadAllData();
+            if (caseId) {
+                await openCaseDetail(caseId);
+            } else if (noteId) {
+                await openNoteDetail(noteId);
+            } else {
+                renderDetailPanel();
+            }
+            return;
+        }
+        if (status === 409) {
             showError('Konflikt wersji engagementu - odswiezam kartke i pobieram aktualny stan.');
             await loadAllData();
             if (caseId) {
@@ -5896,7 +5949,7 @@ submitHitlAgentAction = async function(trigger, kind) {
             }
             return;
         }
-        showError(error.message || 'Nie udalo sie zapisac decyzji HITL (sprawdz Node B / MCP).');
+        showError(errMsg || 'Nie udalo sie zapisac decyzji HITL (sprawdz Node B / MCP).');
     } finally {
         if (!(state.hitlAction && state.hitlAction.pending)) {
             renderDetailPanel();
