@@ -1,46 +1,82 @@
 # AGENTS.md — daszek
 
-**Status:** aktywny router repo.
+Status: active L2 adapter (Typ A). **Node A** (WordPress operator UI).
 
-## Rola
+## Safety capsule
 
-`daszek` jest Node A — panel operatorski WordPress. Projection-only UI i bounded HITL: prezentuje stan z Node B i zbiera feedback operatora (approve/reject, notatki, bridge queue).
+- Code and local proof in this repo beat historical docs.
+- Default target is **local**, not VPS/production.
+- No production mutation without explicit operator order and dedicated proof.
+- Do not write other repos without explicit `ai_os_task` scope expansion.
+- Cross-repo contract changes require Gate A of the owner (usually `gmail-agent`) and of this consumer.
+- Do not declare `done` without the proof appropriate to the UI/HITL layer changed.
+- When opened inside `top-code workspace`, root `../AGENTS.md` also applies.
+- Missing root does not waive these local rules.
 
-Nie jest właścicielem SoT spraw, decyzji ani wykonania — to `../gmail-agent` (Node B, Postgres/journal). Semantyka sprawy, decyzji i wykonania nie powstaje w PHP ani JavaScript; zmiana semantyki feed/case zaczyna się w `gmail-agent` (Python), dopiero potem PHP storage i proxy.
+## Role
 
-## Czytaj najpierw
+Projection-only operator UI and bounded HITL. Presents Node B state; collects approve/reject and notes.  
+**Not** the Source of Truth for cases, decisions, or execution.
 
-1. root `../AGENTS.md`;
-2. kanoniczny cold-start w `../knowledge/INDEX.md`;
-3. `../knowledge/memory/OPERATOR_DECISIONS.md` oraz `ACTIVE_WORKSPACE.md`;
-4. `docs/core/PROJECT_README.md` — kanoniczny manual (UI, proxy, feed, bridge);
-5. `../gmail-agent/docs/runbooks/LAST_PROVEN_STATE.md` tylko dla proof/runtime claims.
+## Owns / Must not
 
-Nie czytaj historycznych handoffów, archiwów ani raw exports jako aktywnej prawdy.
+| Owns | Must not |
+|------|----------|
+| UI render; PHP proxy; session/CSRF surface | Case / decision / reconcile semantics (`gmail-agent`) |
+| Local projection store; bounded HITL UX | Browser `fetch` to Node B bypassing the PHP proxy |
+| | Locally inventing readiness / stagnation / membership when fields come from Node B |
 
-## Runtime boundaries i freeze
+## Read first
 
-- Domyślnie local Docker only; VPS/prod są zawieszone.
-- Daszek jest projection-only; Node B (`../gmail-agent`) pozostaje SoT spraw i wykonania — nie duplikuj logiki reconcile w PHP.
-- Nowy endpoint proxy bez testu po stronie Node B jest zabroniony (contract-gate).
-- Mutacje idą wyłącznie przez `apiFetch` → PHP proxy (session/CSRF/owner + bearer) → Node B; nigdy bezpośredni `fetch` na Node B z przeglądarki.
-- UI potwierdza finalny sukces wyłącznie po świeżej, zbieżnej projekcji z Node B (matching `decision_key` + final status) — nie po HTTP 200/accepted.
-- `outcome_unknown` wymaga operator review; UI nie ponawia automatycznie tej samej decyzji.
-- Stability freeze z `../knowledge/memory/OPERATOR_DECISIONS.md` obowiązuje: zmiany w chronionym obiegu (auth, idempotencja send/reject, konwergencja UI) wymagają reprodukcji, testu RED, minimalnej poprawki, testu GREEN + regresji i runtime proof przed aktualizacją LPS.
+1. This file
+2. Root `../AGENTS.md` when available
+3. `../knowledge/INDEX.md` when cross-repo routing is needed
+4. `docs/core/PROJECT_README.md`
+5. Owning feed/HITL contracts in `../gmail-agent` when changing card semantics
 
-## Verification
+## Write and task scope
+
+- Feed/case **semantics** change first in Node B, then PHP/JS adapters here.
+- New proxy endpoints require an owning Node B contract and proof — not UI-only invention.
+- Scope via `daszek:<path>` in `ai_os_task`.
+
+## Gate A
+
+**Syntax / smoke (minimum on every edit):**
 
 ```powershell
-node --check daszek/public/app.js
-php -l daszek/includes/api-v3-handlers.php
-python -m pytest daszek/tests -q --tb=line
-node --test daszek/tests/test_row4b_note_hitl_approve.node.js
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-local-gates.ps1
+node --check public/app.js
+php -l includes/api-v3-handlers.php
 ```
 
-## Pamięć
+(`php -l` the specific PHP files you changed when handlers differ.)
 
-Nie twórz lokalnego memory banku ani duplikatu `knowledge/memory/*` w tym repo. Trwała pamięć żyje wyłącznie w `../knowledge/memory/{OPERATOR_DECISIONS,BACKLOG,ACTIVE_WORKSPACE,LAST_SESSION}.md`.
+**Behavior / HITL (required before closeout when HITL, feed, or stale-view is in scope):**
+
+```powershell
+python -m pytest tests -q --tb=line
+node --test tests/test_row4b_note_hitl_approve.node.js
+```
+
+`node --check` + `php -l` alone are **not** full HITL/behavior proof.
+
+Workspace Gate B (`scripts/verify-local-gates.ps1`) only when runtime/stack is in scope.
+
+## Cross-repo contract changes
+
+1. Owning repo for case/feed/HITL semantics is usually `gmail-agent`.
+2. Change owner + tests first.
+3. Then change this consumer.
+4. Run Gate A for owner and Daszek.
+5. Do not invent client-only compatibility.
+6. Knowledge docs alone do not change runtime.
+
+## Anti-goals
+
+- Final UI success after bare HTTP 200 — require fresh convergent Node B projection
+- Fail-open stale-view or draft-identity bypass
+- Duplicating Node B domain logic in JS/PHP
+- Treating Daszek as write SoT for cases
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
