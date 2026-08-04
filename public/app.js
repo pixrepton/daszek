@@ -867,6 +867,52 @@ function renderWhatChangedSection(caseItem) {
         </section>`;
 }
 
+function renderUnderstandingQualitySection(caseItem) {
+    const quality = caseItem && typeof caseItem.understanding_quality === 'object'
+        ? caseItem.understanding_quality
+        : null;
+    if (!quality || !quality.operator_label_pl) {
+        return '';
+    }
+    const label = String(quality.operator_label_pl || '').trim();
+    const detail = String(quality.operator_detail_pl || '').trim();
+    const availability = String(quality.availability || '').trim();
+    const toneClass = availability === 'unavailable'
+        ? 'understanding-quality-unavailable'
+        : (availability === 'not_required' ? 'understanding-quality-neutral' : 'understanding-quality-ok');
+    return `
+        <section class="detail-section detail-section-understanding-quality">
+            <h3>Jakość rozumienia</h3>
+            <p class="understanding-quality-label ${toneClass}">${escapeHtml(label)}</p>
+            ${detail ? `<p class="detail-muted understanding-quality-detail">${escapeHtml(detail)}</p>` : ''}
+        </section>`;
+}
+
+function renderReadinessFacetsSection(caseItem) {
+    const facets = caseItem && typeof caseItem.readiness_facets === 'object'
+        ? caseItem.readiness_facets
+        : null;
+    if (!facets || !facets.operator_label_pl) {
+        return '';
+    }
+    const label = String(facets.operator_label_pl || '').trim();
+    const gapCount = Number.isFinite(facets.gap_count) ? facets.gap_count : 0;
+    const conflictCount = Number.isFinite(facets.conflict_count) ? facets.conflict_count : 0;
+    const counts = [];
+    if (gapCount > 0) {
+        counts.push(`braki: ${gapCount}`);
+    }
+    if (conflictCount > 0) {
+        counts.push(`konflikty: ${conflictCount}`);
+    }
+    const countsText = counts.length ? ` (${counts.join(', ')})` : '';
+    return `
+        <section class="detail-section detail-section-readiness">
+            <h3>Gotowość sprawy</h3>
+            <p>${escapeHtml(label)}${escapeHtml(countsText)}</p>
+        </section>`;
+}
+
 function renderDetailSectionIfContent(title, htmlBody) {
     const body = String(htmlBody || '').trim();
     if (!body || body.includes('Brak aktywnych') || body.includes('Brak wpisów') || body.includes('Brak powiązanych')) {
@@ -5636,6 +5682,10 @@ function renderDetailPanel() {
             ${renderAboutCaseSection(caseItem)}
 
             ${renderWhyOnDeskSection(caseItem)}
+
+            ${renderUnderstandingQualitySection(caseItem)}
+
+            ${renderReadinessFacetsSection(caseItem)}
 
             ${renderWhatChangedSection(caseItem)}
 

@@ -256,6 +256,8 @@ function daszek_v2_build_case_read_item($case) {
         'operator_attention_label' => daszek_v2_guidance_operator_attention_label_pl(isset($case['operator_attention_class']) ? $case['operator_attention_class'] : ''),
         'next_step_hint_pl' => isset($case['next_step_hint_pl']) ? $case['next_step_hint_pl'] : '',
         'guidance_confidence' => isset($case['guidance_confidence']) ? floatval($case['guidance_confidence']) : 0.0,
+        'understanding_quality' => isset($case['understanding_quality']) && is_array($case['understanding_quality']) ? $case['understanding_quality'] : [],
+        'readiness_facets' => isset($case['readiness_facets']) && is_array($case['readiness_facets']) ? $case['readiness_facets'] : [],
     ];
 }
 
@@ -371,6 +373,8 @@ function daszek_v2_build_note_card($note, $cases) {
         'operator_attention_label' => daszek_v2_guidance_operator_attention_label_pl(isset($note['operator_attention_class']) ? $note['operator_attention_class'] : ''),
         'next_step_hint_pl' => isset($note['next_step_hint_pl']) ? $note['next_step_hint_pl'] : '',
         'guidance_confidence' => isset($note['guidance_confidence']) ? floatval($note['guidance_confidence']) : 0.0,
+        'understanding_quality' => isset($note['understanding_quality']) && is_array($note['understanding_quality']) ? $note['understanding_quality'] : [],
+        'readiness_facets' => isset($note['readiness_facets']) && is_array($note['readiness_facets']) ? $note['readiness_facets'] : [],
     ];
 }
 
