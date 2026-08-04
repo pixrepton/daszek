@@ -15,7 +15,7 @@ $csrf = daszek_generate_csrf_token();
     <title>Daszek - TOP-INSTAL</title>
     <link rel="icon" href="<?php echo esc_url(DASZEK_PLUGIN_URL . 'public/favicon.svg?v=' . DASZEK_VERSION); ?>" type="image/svg+xml">
     <meta name="csrf-token" content="<?php echo esc_attr($csrf); ?>">
-    <link rel="stylesheet" href="<?php echo esc_url(DASZEK_PLUGIN_URL . 'public/style.css?v=' . DASZEK_VERSION); ?>">
+    <link rel="stylesheet" href="<?php echo esc_url(DASZEK_PLUGIN_URL . 'public/style.css?v=' . DASZEK_VERSION . '.' . filemtime(DASZEK_PLUGIN_DIR . 'public/style.css')); ?>">
 </head>
 <body>
     <a href="#view-root" class="skip-link">Przejdź do treści</a>

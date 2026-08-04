@@ -113,6 +113,12 @@ function daszek_api_register_v2_routes() {
         'permission_callback' => 'daszek_check_auth',
     ]);
 
+    register_rest_route($namespace, '/engagements/(?P<id>[a-zA-Z0-9_:-]+)/feed-visibility/override', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v2_engagement_feed_visibility_override',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
     register_rest_route($namespace, '/agent-hitl/send', [
         'methods' => 'POST',
         'callback' => 'daszek_api_v2_agent_hitl_send',

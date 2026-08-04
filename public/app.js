@@ -3,6 +3,39 @@ const V2_API_BASE = '/wp-json/daszek/v2';
 const V3_API_BASE = '/wp-json/daszek/v3';
 
 const THEME_STORAGE_KEY = 'daszek-theme';
+const EXCEPTIONS_ONLY_STORAGE_KEY = 'daszek-exceptions-only-view';
+const FEED_VISIBILITY_OVERRIDE_MODES = [
+    { value: 'hidden', label: 'Ukryj z biurka' },
+    { value: 'case_timeline_only', label: 'Tylko timeline sprawy' },
+    { value: 'main_feed', label: 'Pokaż na biurku' },
+];
+
+/**
+ * Canonical Node B body for POST …/feed-visibility/override.
+ * clear=true never includes mode (even if a select value is present).
+ */
+function buildFeedVisibilityOverrideRequestBody({
+    clear = false,
+    mode = '',
+    reason = '',
+    operatorId = 'operator',
+} = {}) {
+    const body = { operator_id: String(operatorId || 'operator') };
+    if (clear) {
+        body.clear = true;
+        return body;
+    }
+    const normalizedMode = String(mode || '').trim();
+    if (!normalizedMode) {
+        throw new Error('Wybierz docelową klasyfikację widoczności.');
+    }
+    body.mode = normalizedMode;
+    const normalizedReason = String(reason || '').trim();
+    if (normalizedReason) {
+        body.reason = normalizedReason;
+    }
+    return body;
+}
 
 function applyDaszekTheme(mode) {
     const m = mode === 'dark' ? 'dark' : 'light';
@@ -37,6 +70,7 @@ const state = {
     csrfToken: null,
     currentView: 'desk',
     search: '',
+    exceptionsOnlyView: false,
     detail: null,
     data: {
         desk: { items: [], counts: {} },
@@ -85,6 +119,26 @@ function getCsrfToken() {
 state.csrfToken = getCsrfToken();
 state.hitlAction = state.hitlAction || { pending: false, awaitingSync: false, engagementId: '', kind: '', noteId: '', decisionKey: '', status: '' };
 state.actionDecision = state.actionDecision || { pending: false, awaitingSync: false, proposalId: '', decision: '', decisionKey: '', status: '' };
+try {
+    state.exceptionsOnlyView = sessionStorage.getItem(EXCEPTIONS_ONLY_STORAGE_KEY) === '1';
+} catch (e) {
+    state.exceptionsOnlyView = false;
+}
+
+function setExceptionsOnlyView(enabled) {
+    state.exceptionsOnlyView = !!enabled;
+    try {
+        sessionStorage.setItem(EXCEPTIONS_ONLY_STORAGE_KEY, state.exceptionsOnlyView ? '1' : '0');
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function operationalFeedLatestEndpoint() {
+    return state.exceptionsOnlyView
+        ? '/operational-feed-snapshots/latest?exceptions_only=1'
+        : '/operational-feed-snapshots/latest';
+}
 
 function buildApiUrl(base, endpoint, method = 'GET') {
     const url = new URL(`${base}${endpoint}`, window.location.origin);
@@ -843,14 +897,25 @@ function renderWhyOnDeskSection(caseItem) {
     // note cards did, via the same why_on_desk field). Only rendered when
     // Node B honestly populated it from a fresh, correlated Understanding —
     // omitted otherwise, never a guessed reason.
+    //
+    // Roadmap 2.4: the prose answers "why does this case matter"; the membership
+    // reason codes answer the different question "why is this card on the desk at
+    // all". Both come from Node B — Daszek renders them and derives neither.
     const whySee = String(caseItem.why_on_desk || '').trim();
-    if (!whySee) {
+    const reasonCodes = Array.isArray(caseItem.why_on_desk_reason_codes)
+        ? caseItem.why_on_desk_reason_codes.map((code) => String(code || '').trim()).filter(Boolean)
+        : [];
+    if (!whySee && !reasonCodes.length) {
         return '';
     }
+    const mode = String(caseItem.feed_visibility_mode || '').trim();
     return `
         <section class="detail-section">
             <h3>Dlaczego to widzę</h3>
-            <p>${escapeHtml(whySee)}</p>
+            ${whySee ? `<p>${escapeHtml(whySee)}</p>` : ''}
+            ${reasonCodes.length ? `<p class="detail-muted why-on-desk-reason-codes">${escapeHtml(
+        `Powód obecności na biurku${mode ? ` (${mode})` : ''}: ${reasonCodes.join(', ')}`
+    )}</p>` : ''}
         </section>`;
 }
 
@@ -910,6 +975,54 @@ function renderReadinessFacetsSection(caseItem) {
         <section class="detail-section detail-section-readiness">
             <h3>Gotowość sprawy</h3>
             <p>${escapeHtml(label)}${escapeHtml(countsText)}</p>
+        </section>`;
+}
+
+function renderCaseReadinessSection(caseItem) {
+    // Roadmap 2.2: the composed CaseReadinessState from Node B, rendered next to — not instead
+    // of — the thin readiness facets. Projection only: it never filters or hides a card here.
+    const readiness = caseItem && typeof caseItem.case_readiness === 'object'
+        ? caseItem.case_readiness
+        : null;
+    if (!readiness || !readiness.state) {
+        return '';
+    }
+    const label = String(readiness.operator_label_pl || '').trim();
+    const state = String(readiness.state || '').trim();
+    const waitingFor = String(readiness.waiting_for || '').trim();
+    const details = [];
+    if (waitingFor && waitingFor !== 'none' && waitingFor !== 'unknown') {
+        details.push(`oczekiwanie na: ${waitingFor}`);
+    }
+    if (readiness.is_stagnating) {
+        details.push('stagnacja potwierdzona przez lifecycle/SLA');
+    }
+    const detailText = details.length ? details.join('; ') : '';
+    return `
+        <section class="detail-section detail-section-case-readiness">
+            <h3>Stan gotowości</h3>
+            <p class="case-readiness-label case-readiness-${escapeHtml(state)}">${escapeHtml(label || state)}</p>
+            ${detailText ? `<p class="detail-muted case-readiness-detail">${escapeHtml(detailText)}</p>` : ''}
+        </section>`;
+}
+
+function renderCaseUnderstandingStatusSection(caseItem) {
+    // SLICE-2C: display only. `case_understanding_status` says how good our reasoning about the
+    // case is; it must never decide whether the card is on the desk (feed_visibility owns that).
+    const status = caseItem && typeof caseItem.case_understanding_status === 'object'
+        ? caseItem.case_understanding_status
+        : null;
+    if (!status || !status.status) {
+        return '';
+    }
+    const label = String(status.operator_label_pl || '').trim();
+    const state = String(status.status || '').trim();
+    const reason = String(status.reason || '').trim();
+    return `
+        <section class="detail-section detail-section-understanding-status">
+            <h3>Status rozumienia sprawy</h3>
+            <p class="understanding-status-label understanding-status-${escapeHtml(state)}">${escapeHtml(label || state)}</p>
+            ${reason ? `<p class="detail-muted understanding-status-detail">${escapeHtml(reason)}</p>` : ''}
         </section>`;
 }
 
@@ -2048,7 +2161,7 @@ async function loadAllData() {
             apiFetch(V3_API_BASE, '/cases'),
             apiFetch(V3_API_BASE, '/ai-quality'),
             apiFetch(V2_API_BASE, '/mailbox-cases?view=full&limit=500'),
-            apiFetch(V3_API_BASE, '/operational-feed-snapshots/latest'),
+            apiFetch(V3_API_BASE, operationalFeedLatestEndpoint()),
             apiFetch(V3_API_BASE, '/ingress-quality-snapshots/latest'),
             apiFetch(V3_API_BASE, '/cohort-runs'),
             apiFetch(V3_API_BASE, '/case-archive'),
@@ -2342,6 +2455,12 @@ function installDaszekNavHandlers() {
                 void scanIdentityBindingSuggestions(bindingScanBtn);
                 return;
             }
+            if (handleSystemDiagramClick(event, app)) {
+                return;
+            }
+            return;
+        }
+        if (handleSystemDiagramClick(event, app)) {
             return;
         }
         const next = resolveNavButtonViewId(button);
@@ -2705,6 +2824,13 @@ function renderDeskView() {
         : '';
 
     root.innerHTML = wrapOperationalViewShell('Biurko', `
+        <div class="desk-view-toolbar">
+            <label class="desk-toggle-exceptions">
+                <input type="checkbox" data-exceptions-only-toggle ${state.exceptionsOnlyView ? 'checked' : ''} />
+                Tylko wyjątki
+            </label>
+            ${state.exceptionsOnlyView ? '<span class="detail-muted">Podgląd na żywo z Node B (exceptions_only)</span>' : ''}
+        </div>
         ${renderFeedAttentionSummary(feed)}
         ${deskBoardHtml}
         ${actionSectionHtml}
@@ -3673,20 +3799,67 @@ function renderSystemView() {
     `);
 }
 
+const SYSTEM_DIAGRAM_MOBILE_MQ = '(max-width: 860px)';
+const systemDiagramState = {
+    sources: [],
+    fsApi: null,
+    mqBound: false,
+    escBound: false,
+};
+
+function isSystemDiagramMobileLayout() {
+    return window.matchMedia(SYSTEM_DIAGRAM_MOBILE_MQ).matches;
+}
+
+function renderSystemDiagramToolbar(extraClose) {
+    const closeBtn = extraClose
+        ? `<button type="button" class="system-diagram-toolbtn system-diagram-toolbtn--close" data-diagram-fs-close aria-label="Zamknij diagram">Zamknij</button>`
+        : '';
+    return `<div class="system-diagram-toolbar" role="toolbar" aria-label="Narzędzia diagramu">
+        <button type="button" class="system-diagram-toolbtn" data-diagram-zoom="out" aria-label="Pomniejsz">−</button>
+        <button type="button" class="system-diagram-toolbtn" data-diagram-zoom="in" aria-label="Powiększ">+</button>
+        <button type="button" class="system-diagram-toolbtn" data-diagram-zoom="fit">Dopasuj</button>
+        <button type="button" class="system-diagram-toolbtn" data-diagram-zoom="reset">100%</button>
+        <span class="system-diagram-zoom-label" data-diagram-zoom-label>100%</span>
+        ${closeBtn}
+    </div>`;
+}
+
 function renderSystemDiagramsSection() {
     const manifest = window.DASZEK_SYSTEM_DIAGRAMS_MANIFEST;
     if (!manifest || !manifest.globalSection || !Array.isArray(manifest.globalSection.diagrams)) {
         return '';
     }
     const diagrams = manifest.globalSection.diagrams;
+    systemDiagramState.sources = [];
     const diagramCards = diagrams.map((d, idx) => {
         const mermaidCode = d.mermaid || d.mermaidDoc || '';
         if (!mermaidCode) return '';
         const safeId = `mermaid-diagram-${idx}`;
-        return `<div class="system-diagram-card">
-            <h4>${escapeHtml(d.title || 'Diagram ' + (idx + 1))}</h4>
-            <p class="detail-muted">${escapeHtml(d.caption || '')}</p>
-            <pre class="mermaid" id="${safeId}">${escapeHtml(mermaidCode)}</pre>
+        const hostId = String(d.hostId || safeId);
+        const title = d.title || ('Diagram ' + (idx + 1));
+        systemDiagramState.sources.push({
+            id: safeId,
+            hostId,
+            title,
+            mermaid: mermaidCode,
+        });
+        return `<div class="system-diagram-card" data-diagram-card="${escapeHtml(safeId)}">
+            <h4>${escapeHtml(title)}</h4>
+            <p class="detail-muted system-diagram-caption">${escapeHtml(d.caption || '')}</p>
+            <div class="system-diagram-viewer system-diagram-viewer--desktop" data-diagram-viewer="${escapeHtml(safeId)}" id="${escapeHtml(hostId)}">
+                ${renderSystemDiagramToolbar(false)}
+                <div class="system-diagram-viewport" tabindex="0" aria-label="Podgląd diagramu — przeciągnij, scrolluj aby zoom">
+                    <div class="system-diagram-canvas">
+                        <pre class="mermaid" id="${escapeHtml(safeId)}">${escapeHtml(mermaidCode)}</pre>
+                    </div>
+                </div>
+                <p class="system-diagram-hint detail-muted">Przeciągnij, aby przesunąć · scroll, aby zoom</p>
+            </div>
+            <div class="system-diagram-mobile-cta">
+                <button type="button" class="system-diagram-open-btn" data-diagram-open="${escapeHtml(safeId)}">Otwórz diagram</button>
+                <p class="detail-muted system-diagram-hint">Na telefonie diagram otwiera się na pełnym ekranie — bez ściśniętego podglądu.</p>
+            </div>
         </div>`;
     }).filter(Boolean).join('');
     if (!diagramCards) return '';
@@ -3697,16 +3870,397 @@ function renderSystemDiagramsSection() {
     </section>`;
 }
 
-function initMermaidDiagrams() {
-    if (typeof mermaid === 'undefined') {
+function ensureSystemDiagramFullscreenShell() {
+    let fs = document.getElementById('system-diagram-fullscreen');
+    if (fs) return fs;
+    fs = document.createElement('div');
+    fs.id = 'system-diagram-fullscreen';
+    fs.className = 'system-diagram-fs';
+    fs.hidden = true;
+    fs.setAttribute('role', 'dialog');
+    fs.setAttribute('aria-modal', 'true');
+    fs.setAttribute('aria-label', 'Diagram systemu');
+    fs.innerHTML = `
+        <div class="system-diagram-fs-head">
+            <h3 class="system-diagram-fs-title" data-diagram-fs-title>Diagram</h3>
+            ${renderSystemDiagramToolbar(true)}
+        </div>
+        <div class="system-diagram-viewer system-diagram-viewer--fs" data-diagram-viewer="fs">
+            <div class="system-diagram-viewport" tabindex="0" aria-label="Diagram pełnoekranowy">
+                <div class="system-diagram-canvas" data-diagram-fs-canvas></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(fs);
+    fs.addEventListener('click', (event) => {
+        handleSystemDiagramClick(event, fs);
+    });
+    return fs;
+}
+
+function normalizeMermaidSvg(svg) {
+    if (!svg) return { width: 800, height: 600 };
+    let width = 0;
+    let height = 0;
+    const vb = svg.getAttribute('viewBox');
+    if (vb) {
+        const parts = vb.trim().split(/[\s,]+/).map(Number);
+        if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+            width = parts[2];
+            height = parts[3];
+        }
+    }
+    if ((!width || !height) && typeof svg.getBBox === 'function') {
+        try {
+            const box = svg.getBBox();
+            if (box.width > 0) width = box.width;
+            if (box.height > 0) height = box.height;
+        } catch (err) {
+            /* SVG may not be measurable yet */
+        }
+    }
+    if (!width) width = 800;
+    if (!height) height = 600;
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
+    svg.style.maxWidth = 'none';
+    svg.style.width = `${width}px`;
+    svg.style.height = `${height}px`;
+    return { width, height };
+}
+
+function attachDiagramPanZoom(viewerEl) {
+    if (!viewerEl) return null;
+    const viewport = viewerEl.querySelector('.system-diagram-viewport');
+    const canvas = viewerEl.querySelector('.system-diagram-canvas');
+    const label = viewerEl.querySelector('[data-diagram-zoom-label]')
+        || (viewerEl.closest('.system-diagram-fs') && viewerEl.closest('.system-diagram-fs').querySelector('[data-diagram-zoom-label]'));
+    if (!viewport || !canvas) return null;
+
+    if (viewerEl._diagramPanZoom && typeof viewerEl._diagramPanZoom.destroy === 'function') {
+        viewerEl._diagramPanZoom.destroy();
+    }
+
+    let scale = 1;
+    let tx = 0;
+    let ty = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let pinchDist = 0;
+    const minScale = 0.05;
+    const maxScale = 6;
+    const pointers = new Map();
+
+    function apply() {
+        canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+        if (label) {
+            label.textContent = `${Math.round(scale * 100)}%`;
+        }
+    }
+
+    function clampScale(next) {
+        return Math.min(maxScale, Math.max(minScale, next));
+    }
+
+    function zoomAt(clientX, clientY, nextScale) {
+        const rect = viewport.getBoundingClientRect();
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        const prev = scale;
+        scale = clampScale(nextScale);
+        const ratio = scale / prev;
+        tx = x - (x - tx) * ratio;
+        ty = y - (y - ty) * ratio;
+        apply();
+    }
+
+    function fit() {
+        const svg = canvas.querySelector('svg');
+        const size = normalizeMermaidSvg(svg);
+        const rect = viewport.getBoundingClientRect();
+        const pad = 24;
+        const availW = Math.max(40, rect.width - pad);
+        const availH = Math.max(40, rect.height - pad);
+        scale = clampScale(Math.min(availW / size.width, availH / size.height));
+        tx = (rect.width - size.width * scale) / 2;
+        ty = (rect.height - size.height * scale) / 2;
+        apply();
+    }
+
+    function reset() {
+        const svg = canvas.querySelector('svg');
+        const size = normalizeMermaidSvg(svg);
+        scale = 1;
+        const rect = viewport.getBoundingClientRect();
+        tx = Math.max(0, (rect.width - size.width) / 2);
+        ty = Math.max(0, (rect.height - size.height) / 2);
+        apply();
+    }
+
+    function onWheel(event) {
+        event.preventDefault();
+        const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+        zoomAt(event.clientX, event.clientY, scale * factor);
+    }
+
+    function onPointerDown(event) {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        viewport.setPointerCapture(event.pointerId);
+        if (pointers.size === 1) {
+            dragging = true;
+            lastX = event.clientX;
+            lastY = event.clientY;
+            viewport.classList.add('is-panning');
+        } else if (pointers.size === 2) {
+            dragging = false;
+            const pts = [...pointers.values()];
+            pinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        }
+    }
+
+    function onPointerMove(event) {
+        if (!pointers.has(event.pointerId)) return;
+        pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (pointers.size === 2) {
+            const pts = [...pointers.values()];
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            if (pinchDist > 0 && dist > 0) {
+                const midX = (pts[0].x + pts[1].x) / 2;
+                const midY = (pts[0].y + pts[1].y) / 2;
+                zoomAt(midX, midY, scale * (dist / pinchDist));
+            }
+            pinchDist = dist;
+            return;
+        }
+        if (!dragging) return;
+        const dx = event.clientX - lastX;
+        const dy = event.clientY - lastY;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        tx += dx;
+        ty += dy;
+        apply();
+    }
+
+    function onPointerUp(event) {
+        pointers.delete(event.pointerId);
+        if (pointers.size < 2) pinchDist = 0;
+        if (pointers.size === 0) {
+            dragging = false;
+            viewport.classList.remove('is-panning');
+        } else if (pointers.size === 1) {
+            const only = [...pointers.values()][0];
+            dragging = true;
+            lastX = only.x;
+            lastY = only.y;
+        }
+    }
+
+    viewport.addEventListener('wheel', onWheel, { passive: false });
+    viewport.addEventListener('pointerdown', onPointerDown);
+    viewport.addEventListener('pointermove', onPointerMove);
+    viewport.addEventListener('pointerup', onPointerUp);
+    viewport.addEventListener('pointercancel', onPointerUp);
+    viewport.addEventListener('lostpointercapture', onPointerUp);
+
+    const api = {
+        in() {
+            const rect = viewport.getBoundingClientRect();
+            zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, scale * 1.25);
+        },
+        out() {
+            const rect = viewport.getBoundingClientRect();
+            zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, scale / 1.25);
+        },
+        fit,
+        reset,
+        destroy() {
+            viewport.removeEventListener('wheel', onWheel);
+            viewport.removeEventListener('pointerdown', onPointerDown);
+            viewport.removeEventListener('pointermove', onPointerMove);
+            viewport.removeEventListener('pointerup', onPointerUp);
+            viewport.removeEventListener('pointercancel', onPointerUp);
+            viewport.removeEventListener('lostpointercapture', onPointerUp);
+            viewport.classList.remove('is-panning');
+        },
+    };
+    viewerEl._diagramPanZoom = api;
+    requestAnimationFrame(() => fit());
+    return api;
+}
+
+function configureMermaidForDiagrams() {
+    if (typeof mermaid === 'undefined') return false;
+    const dark = document.documentElement.dataset.theme === 'dark';
+    mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: dark ? 'dark' : 'default',
+        fontFamily: 'ui-sans-serif, system-ui, Segoe UI, sans-serif',
+        themeVariables: {
+            fontSize: '16px',
+            fontFamily: 'ui-sans-serif, system-ui, Segoe UI, sans-serif',
+        },
+        flowchart: {
+            htmlLabels: true,
+            curve: 'basis',
+            padding: 12,
+            nodeSpacing: 30,
+            rankSpacing: 40,
+        },
+    });
+    return true;
+}
+
+function closeSystemDiagramFullscreen() {
+    const fs = document.getElementById('system-diagram-fullscreen');
+    if (!fs) return;
+    fs.hidden = true;
+    document.body.classList.remove('system-diagram-fs-open');
+    const viewer = fs.querySelector('[data-diagram-viewer="fs"]');
+    if (viewer && viewer._diagramPanZoom) {
+        viewer._diagramPanZoom.destroy();
+        viewer._diagramPanZoom = null;
+    }
+    systemDiagramState.fsApi = null;
+    const canvas = fs.querySelector('[data-diagram-fs-canvas]');
+    if (canvas) canvas.innerHTML = '';
+}
+
+async function openSystemDiagramFullscreen(diagramId) {
+    const source = systemDiagramState.sources.find((item) => item.id === diagramId);
+    if (!source) return;
+    if (!configureMermaidForDiagrams()) {
+        console.warn('Mermaid niedostępny — nie można otworzyć diagramu');
         return;
     }
+    const fs = ensureSystemDiagramFullscreenShell();
+    const titleEl = fs.querySelector('[data-diagram-fs-title]');
+    if (titleEl) titleEl.textContent = source.title || 'Diagram';
+    const viewer = fs.querySelector('[data-diagram-viewer="fs"]');
+    const canvas = fs.querySelector('[data-diagram-fs-canvas]');
+    if (!viewer || !canvas) return;
+    if (viewer._diagramPanZoom) {
+        viewer._diagramPanZoom.destroy();
+        viewer._diagramPanZoom = null;
+    }
+    canvas.innerHTML = '';
+
+    const desktopHost = document.getElementById(diagramId);
+    const desktopSvg = desktopHost ? desktopHost.querySelector('svg') : null;
+    if (desktopSvg) {
+        canvas.appendChild(desktopSvg.cloneNode(true));
+        normalizeMermaidSvg(canvas.querySelector('svg'));
+    } else {
+        const pre = document.createElement('pre');
+        pre.className = 'mermaid';
+        pre.textContent = source.mermaid;
+        canvas.appendChild(pre);
+        try {
+            await mermaid.run({ nodes: [pre] });
+        } catch (err) {
+            console.warn('Mermaid fullscreen render error:', err);
+            canvas.innerHTML = `<p class="error-inline">Nie udało się wyrenderować diagramu.</p>`;
+            fs.hidden = false;
+            document.body.classList.add('system-diagram-fs-open');
+            return;
+        }
+        normalizeMermaidSvg(canvas.querySelector('svg'));
+    }
+
+    fs.hidden = false;
+    document.body.classList.add('system-diagram-fs-open');
+    systemDiagramState.fsApi = attachDiagramPanZoom(viewer);
+    const closeBtn = fs.querySelector('[data-diagram-fs-close]');
+    if (closeBtn) closeBtn.focus();
+}
+
+async function initMermaidDiagrams() {
+    installSystemDiagramChrome();
+    if (!document.querySelector('.detail-section-diagrams')) {
+        return;
+    }
+    if (!configureMermaidForDiagrams()) {
+        return;
+    }
+
+    if (isSystemDiagramMobileLayout()) {
+        document.querySelectorAll('.system-diagram-viewer--desktop .system-diagram-canvas').forEach((canvas) => {
+            const pre = canvas.querySelector('pre.mermaid');
+            if (pre && !pre.querySelector('svg')) {
+                /* keep source for later fullscreen render; do not shrink-render on mobile */
+            }
+        });
+        return;
+    }
+
+    const nodes = [...document.querySelectorAll('.system-diagram-viewer--desktop pre.mermaid')];
+    if (!nodes.length) return;
     try {
-        mermaid.initialize({ startOnLoad: false, theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default' });
-        mermaid.run({ querySelector: '.mermaid' });
+        await mermaid.run({ nodes });
     } catch (e) {
         console.warn('Mermaid init error:', e);
+        return;
     }
+    document.querySelectorAll('.system-diagram-viewer--desktop').forEach((viewer) => {
+        const svg = viewer.querySelector('svg');
+        if (svg) normalizeMermaidSvg(svg);
+        attachDiagramPanZoom(viewer);
+    });
+}
+
+function installSystemDiagramChrome() {
+    if (!systemDiagramState.escBound) {
+        systemDiagramState.escBound = true;
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeSystemDiagramFullscreen();
+            }
+        });
+    }
+    if (!systemDiagramState.mqBound) {
+        systemDiagramState.mqBound = true;
+        const mq = window.matchMedia(SYSTEM_DIAGRAM_MOBILE_MQ);
+        const onChange = () => {
+            if (normalizeMainViewId(state.currentView) !== 'system') return;
+            closeSystemDiagramFullscreen();
+            void initMermaidDiagrams();
+        };
+        if (typeof mq.addEventListener === 'function') {
+            mq.addEventListener('change', onChange);
+        } else if (typeof mq.addListener === 'function') {
+            mq.addListener(onChange);
+        }
+    }
+}
+
+function handleSystemDiagramClick(event, app) {
+    const closeBtn = event.target.closest('[data-diagram-fs-close]');
+    if (closeBtn) {
+        closeSystemDiagramFullscreen();
+        return true;
+    }
+    const openBtn = event.target.closest('[data-diagram-open]');
+    if (openBtn && app.contains(openBtn)) {
+        void openSystemDiagramFullscreen(openBtn.getAttribute('data-diagram-open'));
+        return true;
+    }
+    const zoomBtn = event.target.closest('[data-diagram-zoom]');
+    if (!zoomBtn) return false;
+    const fs = document.getElementById('system-diagram-fullscreen');
+    const inFs = fs && !fs.hidden && fs.contains(zoomBtn);
+    if (!inFs && !app.contains(zoomBtn)) return false;
+    const viewer = inFs
+        ? fs.querySelector('[data-diagram-viewer="fs"]')
+        : zoomBtn.closest('[data-diagram-viewer]');
+    const api = viewer && viewer._diagramPanZoom;
+    const action = zoomBtn.getAttribute('data-diagram-zoom');
+    if (api && action && typeof api[action] === 'function') {
+        api[action]();
+    }
+    return true;
 }
 
 function renderLastIngressView() {
@@ -4454,6 +5008,53 @@ function renderOperationalTimeline(items) {
             <div>${escapeHtml(row.summary_pl || '')}</div>
         </li>`;
     }).join('')}</ol>`;
+}
+
+function renderFeedVisibilityOverrideSection(caseItem, payload) {
+    const row = caseItem || {};
+    const engagementId = String(
+        row.engagement_id
+        || (payload && payload.engagement_id)
+        || ''
+    ).trim();
+    if (!engagementId) {
+        return '';
+    }
+    // feed_visibility_mode on feed rows is effective projection (may be attention_required).
+    // Operator override request modes are only hidden|case_timeline_only|main_feed.
+    const effectiveMode = String(
+        row.effective_feed_visibility_mode
+        || row.feed_visibility_mode
+        || ''
+    ).trim();
+    const reasonCodes = Array.isArray(row.why_on_desk_reason_codes)
+        ? row.why_on_desk_reason_codes.map((code) => String(code || '').trim()).filter(Boolean)
+        : [];
+    const hasOperatorOverride = reasonCodes.some((code) => code.startsWith('operator_reclassified:'));
+    const options = FEED_VISIBILITY_OVERRIDE_MODES.map((opt) => (
+        `<option value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</option>`
+    )).join('');
+    return `
+        <section class="detail-section detail-section-actions detail-section-feed-visibility">
+            <h3>Klasyfikacja widoczności</h3>
+            <p class="detail-muted">Zmiana membership/visibility przez Node B — bez lokalnego zapisu w Daszku.</p>
+            ${effectiveMode ? `<p class="detail-muted">Efektywny widok na biurku: <strong>${escapeHtml(effectiveMode)}</strong>${effectiveMode === 'attention_required' ? ' <span class="detail-muted">(projekcja executive — nie jest trybem override)</span>' : ''}</p>` : ''}
+            ${hasOperatorOverride ? '<p class="detail-muted">Aktywny override operatora (żądane: hidden / case_timeline_only / main_feed) — effective może nadal być attention_required przy otwartym HITL.</p>' : ''}
+            ${reasonCodes.length ? `<p class="detail-muted">Powody obecności: ${escapeHtml(reasonCodes.join(', '))}</p>` : ''}
+            <div class="feed-visibility-override-controls">
+                <label class="detail-muted" for="ds-feed-visibility-mode">Żądana reklasyfikacja (override)</label>
+                <select id="ds-feed-visibility-mode" class="ds-select" data-feed-visibility-mode>
+                    <option value="">— wybierz —</option>
+                    ${options}
+                </select>
+                <label class="detail-muted" for="ds-feed-visibility-reason">Krótki powód (opcjonalnie)</label>
+                <input id="ds-feed-visibility-reason" class="ds-input" data-feed-visibility-reason type="text" maxlength="80" placeholder="np. szum po weryfikacji" />
+                <div class="hitl-actions">
+                    <button type="button" class="btn btn-secondary btn-small" data-feed-visibility-apply="${escapeHtml(engagementId)}" data-feed-visibility-case="${escapeHtml(String(row.case_id || ''))}">Zastosuj reklasyfikację</button>
+                    <button type="button" class="btn btn-ghost btn-small" data-feed-visibility-clear="${escapeHtml(engagementId)}" data-feed-visibility-case="${escapeHtml(String(row.case_id || ''))}">Wyczyść override</button>
+                </div>
+            </div>
+        </section>`;
 }
 
 function renderEngagementActionsPlaceholder(caseItem, payload) {
@@ -5595,6 +6196,8 @@ function renderDetailPanel() {
 
                 ${renderHitlOperatorActions(note, payload, { approveOnly: true })}
 
+                ${renderFeedVisibilityOverrideSection(note, payload)}
+
                 ${renderNoteFeedbackBlock(note)}
 
                 ${renderGuidanceSection(note)}
@@ -5673,6 +6276,8 @@ function renderDetailPanel() {
 
             ${renderHitlOperatorActions(caseItem, payload)}
 
+            ${renderFeedVisibilityOverrideSection(caseItem, payload)}
+
             ${renderEngagementActionsPlaceholder(caseItem, payload)}
 
             ${renderOsEventsSection(state.detail.osEvents)}
@@ -5685,7 +6290,11 @@ function renderDetailPanel() {
 
             ${renderUnderstandingQualitySection(caseItem)}
 
+            ${renderCaseUnderstandingStatusSection(caseItem)}
+
             ${renderReadinessFacetsSection(caseItem)}
+
+            ${renderCaseReadinessSection(caseItem)}
 
             ${renderWhatChangedSection(caseItem)}
 
@@ -5776,6 +6385,49 @@ function daszekLifecycle(stateValue) {
         resolved: 'Załatwiona',
         archived: 'Archiwalna',
     }[stateValue] || 'Aktywna';
+}
+
+async function submitFeedVisibilityOverride(trigger, { clear = false } = {}) {
+    const engagementId = String(trigger.dataset.feedVisibilityApply || trigger.dataset.feedVisibilityClear || '').trim();
+    const caseId = String(trigger.dataset.feedVisibilityCase || '').trim();
+    if (!engagementId) {
+        showError('Brak engagement_id — odśwież szczegóły sprawy.');
+        return;
+    }
+    let body;
+    try {
+        if (clear) {
+            body = buildFeedVisibilityOverrideRequestBody({
+                clear: true,
+                operatorId: state.currentUser || 'operator',
+            });
+        } else {
+            const modeEl = document.querySelector('[data-feed-visibility-mode]');
+            const reasonEl = document.querySelector('[data-feed-visibility-reason]');
+            body = buildFeedVisibilityOverrideRequestBody({
+                clear: false,
+                mode: modeEl ? modeEl.value : '',
+                reason: reasonEl ? reasonEl.value : '',
+                operatorId: state.currentUser || 'operator',
+            });
+        }
+    } catch (buildError) {
+        showError(buildError.message || 'Niepoprawny request reklasyfikacji.');
+        return;
+    }
+    try {
+        await apiFetch(V2_API_BASE, `/engagements/${encodeURIComponent(engagementId)}/feed-visibility/override`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+        });
+        showToast(clear ? 'Override widoczności wyczyszczony — odświeżam projekcję.' : 'Reklasyfikacja zapisana w Node B — odświeżam projekcję.');
+        await loadAllData();
+        if (caseId) {
+            await openCaseDetail(caseId);
+        }
+    } catch (error) {
+        showError(error.message || 'Nie udało się zapisać reklasyfikacji w Node B.');
+    }
 }
 
 async function sendFeedback(noteId, action, extra = {}) {
@@ -6245,9 +6897,29 @@ async function createManualTask(formData) {
     }
 }
 
+function bindDeskViewDelegated() {
+    const root = document.getElementById('view-root');
+    if (!root || root.dataset.deskDelegationBound === '1') {
+        return;
+    }
+    root.dataset.deskDelegationBound = '1';
+    root.addEventListener('change', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) {
+            return;
+        }
+        if (!target.matches('[data-exceptions-only-toggle]')) {
+            return;
+        }
+        setExceptionsOnlyView(!!target.checked);
+        void loadAllData();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     installDaszekNavHandlers();
     bindTaskButtonsDelegated();
+    bindDeskViewDelegated();
 
     initDaszekTheme();
     enhanceAccessibleTooltips(document.getElementById('app'));
@@ -6443,6 +7115,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.detail = null;
                 renderDetailPanel();
                 void loadAllData();
+                return;
+            }
+            const feedVisibilityApply = event.target.closest('[data-feed-visibility-apply]');
+            if (feedVisibilityApply) {
+                void submitFeedVisibilityOverride(feedVisibilityApply, { clear: false });
+                return;
+            }
+            const feedVisibilityClear = event.target.closest('[data-feed-visibility-clear]');
+            if (feedVisibilityClear) {
+                void submitFeedVisibilityOverride(feedVisibilityClear, { clear: true });
                 return;
             }
             if (event.target.closest('[data-close-detail]')) {

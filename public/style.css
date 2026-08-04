@@ -1064,12 +1064,7 @@ select:focus {
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--paper-strong);
-    overflow-x: auto;
-}
-
-.system-mermaid-host svg {
-    max-width: 100%;
-    height: auto;
+    overflow: hidden;
 }
 
 .system-pipeline-detail {
@@ -2474,19 +2469,188 @@ button.attachment-chip--preview:hover {
     color: var(--ink);
     line-height: 1.55;
     max-width: 72ch;
+    white-space: pre-wrap;
 }
 
-.system-mermaid-host {
-    overflow-x: auto;
-    padding: var(--space-3);
+.system-diagram-card {
+    margin-bottom: var(--space-5, 1rem);
+    padding: var(--space-4, 0.75rem);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--paper-strong);
+}
+
+.system-diagram-card h4 {
+    margin: 0 0 var(--space-2, 0.25rem);
+    font-size: var(--font-md);
+    font-weight: 600;
+}
+
+.system-diagram-viewer--desktop {
+    display: block;
+    margin-top: var(--space-3);
+}
+
+.system-diagram-mobile-cta {
+    display: none;
+    margin-top: var(--space-3);
+}
+
+.system-diagram-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: var(--space-2);
+}
+
+.system-diagram-toolbtn {
+    appearance: none;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--paper);
+    color: var(--ink);
+    font-size: var(--font-sm);
+    line-height: 1;
+    min-height: 2rem;
+    min-width: 2rem;
+    padding: 0.35rem 0.55rem;
+    cursor: pointer;
+}
+
+.system-diagram-toolbtn:hover,
+.system-diagram-toolbtn:focus-visible {
+    border-color: var(--ink);
+    outline: none;
+}
+
+.system-diagram-toolbtn--close {
+    margin-left: auto;
+    font-weight: 600;
+}
+
+.system-diagram-zoom-label {
+    font-size: var(--font-sm);
+    color: var(--muted);
+    min-width: 3rem;
+}
+
+.system-diagram-viewport {
+    position: relative;
+    height: min(70vh, 720px);
+    overflow: hidden;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    background: var(--surface-raised);
+    background: var(--surface-raised, var(--paper));
+    touch-action: none;
+    cursor: grab;
+    overscroll-behavior: contain;
 }
 
-.system-mermaid-host svg {
+.system-diagram-viewport.is-panning {
+    cursor: grabbing;
+}
+
+.system-diagram-canvas {
+    transform-origin: 0 0;
+    will-change: transform;
+    display: inline-block;
+}
+
+.system-diagram-canvas pre.mermaid,
+.system-diagram-viewer .mermaid {
+    margin: 0;
+    padding: 0;
+    max-width: none;
+    overflow: visible;
+    background: transparent;
+    white-space: normal;
+    font-family: inherit;
+}
+
+.system-diagram-canvas svg,
+.system-mermaid-host svg,
+pre.mermaid svg {
     display: block;
-    max-width: 100%;
+    max-width: none !important;
+    height: auto;
+}
+
+.system-diagram-hint {
+    margin: var(--space-2) 0 0;
+    font-size: var(--font-sm);
+}
+
+.system-diagram-open-btn {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.65rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--paper);
+    color: var(--ink);
+    font-size: var(--font-md);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.system-diagram-open-btn:hover,
+.system-diagram-open-btn:focus-visible {
+    border-color: var(--ink);
+    outline: none;
+}
+
+body.system-diagram-fs-open {
+    overflow: hidden;
+}
+
+.system-diagram-fs {
+    position: fixed;
+    inset: 0;
+    z-index: 12000;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-app, var(--paper));
+    color: var(--ink);
+}
+
+.system-diagram-fs[hidden] {
+    display: none !important;
+}
+
+.system-diagram-fs-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-raised, var(--paper-strong));
+}
+
+.system-diagram-fs-title {
+    margin: 0;
+    font-size: var(--font-lg);
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.system-diagram-viewer--fs {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-2);
+}
+
+.system-diagram-viewer--fs .system-diagram-viewport {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    border-radius: var(--radius-sm);
 }
 
 #system-mermaid-mega-master.system-mermaid-host {
@@ -2531,6 +2695,32 @@ button.attachment-chip--preview:hover {
     font-size: var(--font-sm);
 }
 
+@media (max-width: 860px) {
+    .system-diagram-viewer--desktop {
+        display: none !important;
+    }
+
+    .system-diagram-mobile-cta {
+        display: block;
+    }
+
+    .system-diagram-fs-head {
+        padding: var(--space-3);
+        padding-top: max(var(--space-3), env(safe-area-inset-top));
+    }
+
+    .system-diagram-viewer--fs {
+        padding: var(--space-2);
+        padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
+    }
+
+    .system-diagram-toolbtn {
+        min-height: 2.5rem;
+        min-width: 2.5rem;
+        font-size: var(--font-md);
+    }
+}
+
 /* Source type badges for mailbox source-type hierarchy (Fix #5) */
 .source-badge {
     display: inline-flex;
@@ -2562,36 +2752,6 @@ button.attachment-chip--preview:hover {
     color: #37474f;
     border-color: #b0bec5;
     background: #eceff1;
-}
-
-/* System Diagrams */
-.system-diagram-card {
-    margin-bottom: var(--ds-space-5, 16px);
-    padding: var(--ds-space-4, 12px);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-md);
-    background: var(--paper-strong);
-}
-
-.system-diagram-card h4 {
-    margin: 0 0 var(--ds-space-2, 4px);
-    font-size: var(--font-md);
-    font-weight: 600;
-}
-
-pre.mermaid {
-    margin-top: var(--ds-space-3, 8px);
-    overflow-x: auto;
-    max-width: 100%;
-    padding: var(--ds-space-3, 8px);
-    background: transparent;
-    white-space: pre-wrap;
-    font-family: inherit;
-}
-
-pre.mermaid svg {
-    max-width: 100%;
-    height: auto;
 }
 
 /* Utility: hidden state */

@@ -258,6 +258,7 @@ function daszek_v2_build_case_read_item($case) {
         'guidance_confidence' => isset($case['guidance_confidence']) ? floatval($case['guidance_confidence']) : 0.0,
         'understanding_quality' => isset($case['understanding_quality']) && is_array($case['understanding_quality']) ? $case['understanding_quality'] : [],
         'readiness_facets' => isset($case['readiness_facets']) && is_array($case['readiness_facets']) ? $case['readiness_facets'] : [],
+        'case_readiness' => isset($case['case_readiness']) && is_array($case['case_readiness']) ? $case['case_readiness'] : [],
     ];
 }
 
@@ -375,6 +376,7 @@ function daszek_v2_build_note_card($note, $cases) {
         'guidance_confidence' => isset($note['guidance_confidence']) ? floatval($note['guidance_confidence']) : 0.0,
         'understanding_quality' => isset($note['understanding_quality']) && is_array($note['understanding_quality']) ? $note['understanding_quality'] : [],
         'readiness_facets' => isset($note['readiness_facets']) && is_array($note['readiness_facets']) ? $note['readiness_facets'] : [],
+        'case_readiness' => isset($note['case_readiness']) && is_array($note['case_readiness']) ? $note['case_readiness'] : [],
     ];
 }
 

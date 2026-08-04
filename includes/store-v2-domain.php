@@ -440,6 +440,9 @@ function daszek_v2_build_case_record($case_patch, $existing_case = [], $signal =
         'guidance_confidence' => isset($case_patch['guidance_confidence']) ? floatval($case_patch['guidance_confidence']) : (isset($existing_case['guidance_confidence']) ? floatval($existing_case['guidance_confidence']) : 0.0),
         'understanding_quality' => daszek_v2_pick_json_value(isset($case_patch['understanding_quality']) ? $case_patch['understanding_quality'] : [], isset($existing_case['understanding_quality']) ? $existing_case['understanding_quality'] : [], []),
         'readiness_facets' => daszek_v2_pick_json_value(isset($case_patch['readiness_facets']) ? $case_patch['readiness_facets'] : [], isset($existing_case['readiness_facets']) ? $existing_case['readiness_facets'] : [], []),
+        // Roadmap 2.2: composed CaseReadinessState from Node B. Projection only — Daszek renders it
+        // and never re-derives it, and it must not gate card membership.
+        'case_readiness' => daszek_v2_pick_json_value(isset($case_patch['case_readiness']) ? $case_patch['case_readiness'] : [], isset($existing_case['case_readiness']) ? $existing_case['case_readiness'] : [], []),
         'latest_signal_id' => daszek_v2_pick_text_value($incoming_latest_signal_id, isset($existing_case['latest_signal_id']) ? $existing_case['latest_signal_id'] : ''),
         'latest_signal_at' => $latest_signal_at,
         'case_link_decision' => isset($case_patch['case_link_decision']) ? sanitize_text_field($case_patch['case_link_decision']) : (isset($existing_case['case_link_decision']) ? $existing_case['case_link_decision'] : 'no_link'),
@@ -562,6 +565,7 @@ function daszek_v2_build_desk_note_record($desk_note_patch, $existing_note = [],
         'guidance_confidence' => isset($desk_note_patch['guidance_confidence']) ? floatval($desk_note_patch['guidance_confidence']) : (isset($existing_note['guidance_confidence']) ? floatval($existing_note['guidance_confidence']) : 0.0),
         'understanding_quality' => daszek_v2_pick_json_value(isset($desk_note_patch['understanding_quality']) ? $desk_note_patch['understanding_quality'] : [], isset($existing_note['understanding_quality']) ? $existing_note['understanding_quality'] : [], []),
         'readiness_facets' => daszek_v2_pick_json_value(isset($desk_note_patch['readiness_facets']) ? $desk_note_patch['readiness_facets'] : [], isset($existing_note['readiness_facets']) ? $existing_note['readiness_facets'] : [], []),
+        'case_readiness' => daszek_v2_pick_json_value(isset($desk_note_patch['case_readiness']) ? $desk_note_patch['case_readiness'] : [], isset($existing_note['case_readiness']) ? $existing_note['case_readiness'] : [], []),
         'feedback_state' => $feedback_state,
         'created_at' => isset($existing_note['created_at']) ? $existing_note['created_at'] : $updated_at,
         'updated_at' => $updated_at,

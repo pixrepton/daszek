@@ -831,6 +831,82 @@ function daszek_api_v2_engagement_materialize_approve(WP_REST_Request $request) 
     return $result;
 }
 
+function daszek_api_v2_engagement_feed_visibility_override(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    $owner_check = daszek_api_v2_require_owner();
+    if (is_wp_error($owner_check)) {
+        return $owner_check;
+    }
+
+    $engagement_id = sanitize_text_field((string) $request->get_param('id'));
+    if ($engagement_id === '') {
+        return new WP_Error('invalid_request', 'Brak engagement_id.', ['status' => 400]);
+    }
+    $body = $request->get_json_params();
+    if (!is_array($body)) {
+        $body = [];
+    }
+
+    $clear = !empty($body['clear']);
+    $mode_raw = (isset($body['mode']) && is_string($body['mode'])) ? trim($body['mode']) : '';
+    // Canonical clear: mode must be absent. Fail-closed on ambiguous clear+mode.
+    if ($clear && $mode_raw !== '') {
+        return new WP_Error(
+            'ambiguous_request',
+            'clear=true cannot be combined with mode',
+            ['status' => 400]
+        );
+    }
+
+    $node_b_body = [];
+    if ($clear) {
+        $node_b_body['clear'] = true;
+    } elseif ($mode_raw !== '') {
+        $node_b_body['mode'] = sanitize_text_field($mode_raw);
+    } else {
+        return new WP_Error('invalid_request', 'mode is required unless clear=true', ['status' => 400]);
+    }
+    if (isset($body['reason']) && is_string($body['reason']) && $body['reason'] !== '') {
+        $node_b_body['reason'] = sanitize_text_field($body['reason']);
+    }
+    if (isset($body['expected_version']) && is_numeric($body['expected_version'])) {
+        $node_b_body['expected_version'] = (int) $body['expected_version'];
+    }
+    $operator_id = sanitize_text_field((string) ($body['operator_id'] ?? ''));
+    if ($operator_id !== '') {
+        $node_b_body['operator_id'] = $operator_id;
+    }
+
+    $result = daszek_node_b_get_json(
+        '/engagements/' . rawurlencode($engagement_id) . '/feed-visibility/override',
+        'POST',
+        $node_b_body
+    );
+    if (is_wp_error($result)) {
+        $data = $result->get_error_data();
+        $status = is_array($data) && isset($data['status']) ? (int) $data['status'] : 502;
+        $body_detail = (is_array($data) && isset($data['body']) && is_array($data['body'])) ? $data['body'] : [];
+        $message = '';
+        if (isset($body_detail['detail']) && is_string($body_detail['detail'])) {
+            $message = $body_detail['detail'];
+        } elseif (isset($body_detail['error']) && is_array($body_detail['error']) && isset($body_detail['error']['message'])) {
+            $message = (string) $body_detail['error']['message'];
+        }
+        if ($message !== '') {
+            return new WP_Error('feed_visibility_override_failed', sanitize_text_field($message), ['status' => $status > 0 ? $status : 409, 'detail' => $body_detail]);
+        }
+        return $result;
+    }
+    if (empty($result['ok'])) {
+        $message = isset($result['error']) ? sanitize_text_field((string) $result['error']) : 'Node B odrzucil override widocznosci.';
+        return new WP_Error('feed_visibility_override_failed', $message, ['status' => 502, 'detail' => $result]);
+    }
+    return $result;
+}
+
 function daszek_api_v2_agent_hitl_send(WP_REST_Request $request) {
     return new WP_Error(
         'agent_hitl_send_disabled',
@@ -1566,6 +1642,28 @@ function daszek_api_v3_operational_feed_snapshots_list(WP_REST_Request $request)
 }
 
 function daszek_api_v3_operational_feed_snapshot_latest(WP_REST_Request $request) {
+    $exceptions_only = rest_sanitize_boolean($request->get_param('exceptions_only'));
+    if ($exceptions_only) {
+        $owner_check = daszek_api_v2_require_owner();
+        if (is_wp_error($owner_check)) {
+            return $owner_check;
+        }
+        $preview = daszek_node_b_get_json('/system/operational-feed?exceptions_only=1');
+        if (is_wp_error($preview)) {
+            return $preview;
+        }
+        if (empty($preview['ok']) || empty($preview['snapshot']) || !is_array($preview['snapshot'])) {
+            $message = isset($preview['error']) ? sanitize_text_field((string) $preview['error']) : 'Node B nie zwrocil podgladu feedu.';
+            return new WP_Error('operational_feed_preview_failed', $message, ['status' => 502, 'detail' => $preview]);
+        }
+        return [
+            'ok' => true,
+            'snapshot' => $preview['snapshot'],
+            'live_preview' => true,
+            'exceptions_only' => true,
+        ];
+    }
+
     if (!daszek_v3_bootstrap_storage()) {
         return new WP_Error('storage_error', daszek_v3_storage_error_message(), ['status' => 500]);
     }
