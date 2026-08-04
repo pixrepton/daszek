@@ -4173,6 +4173,15 @@ async function openSystemDiagramFullscreen(diagramId) {
     fs.hidden = false;
     document.body.classList.add('system-diagram-fs-open');
     systemDiagramState.fsApi = attachDiagramPanZoom(viewer);
+    if (isSystemDiagramMobileLayout() && systemDiagramState.fsApi) {
+        // Fit alone leaves mega-diagrams unreadable on a phone — nudge toward ~14px labels.
+        for (let i = 0; i < 12; i += 1) {
+            const fo = canvas.querySelector('foreignObject');
+            if (!fo) break;
+            if (fo.getBoundingClientRect().height >= 14) break;
+            systemDiagramState.fsApi.in();
+        }
+    }
     const closeBtn = fs.querySelector('[data-diagram-fs-close]');
     if (closeBtn) closeBtn.focus();
 }
