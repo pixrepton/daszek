@@ -4520,7 +4520,7 @@ function renderHitlOperatorActions(caseItem, payload) {
         </section>`;
 }
 
-renderHitlOperatorActions = function(caseItem, payload, options = {}) {
+renderHitlOperatorActions = function (caseItem, payload, options = {}) {
     const row = caseItem || {};
     const opts = options || {};
     const hitlPending = Boolean(
@@ -5839,7 +5839,7 @@ async function submitHitlAgentAction(trigger, kind) {
     }
 }
 
-submitHitlAgentAction = async function(trigger, kind) {
+submitHitlAgentAction = async function (trigger, kind) {
     const engagementId = String(trigger.dataset.hitlApprove || trigger.dataset.hitlSend || '').trim();
     const caseId = String(trigger.dataset.hitlCase || '').trim();
     const noteId = String(
