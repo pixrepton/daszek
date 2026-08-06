@@ -119,8 +119,31 @@ function getCsrfToken() {
 state.csrfToken = getCsrfToken();
 state.hitlAction = state.hitlAction || { pending: false, awaitingSync: false, engagementId: '', kind: '', noteId: '', decisionKey: '', status: '' };
 state.actionDecision = state.actionDecision || { pending: false, awaitingSync: false, proposalId: '', decision: '', decisionKey: '', status: '' };
+function readExceptionsOnlyPreference() {
+    try {
+        const local = localStorage.getItem(EXCEPTIONS_ONLY_STORAGE_KEY);
+        if (local === '1' || local === '0') {
+            return local === '1';
+        }
+        // Migrate 2.4D sessionStorage preference into durable localStorage.
+        const session = sessionStorage.getItem(EXCEPTIONS_ONLY_STORAGE_KEY);
+        if (session === '1' || session === '0') {
+            localStorage.setItem(EXCEPTIONS_ONLY_STORAGE_KEY, session);
+            try {
+                sessionStorage.removeItem(EXCEPTIONS_ONLY_STORAGE_KEY);
+            } catch (_) {
+                /* ignore */
+            }
+            return session === '1';
+        }
+    } catch (e) {
+        /* ignore */
+    }
+    return false;
+}
+
 try {
-    state.exceptionsOnlyView = sessionStorage.getItem(EXCEPTIONS_ONLY_STORAGE_KEY) === '1';
+    state.exceptionsOnlyView = readExceptionsOnlyPreference();
 } catch (e) {
     state.exceptionsOnlyView = false;
 }
@@ -128,7 +151,7 @@ try {
 function setExceptionsOnlyView(enabled) {
     state.exceptionsOnlyView = !!enabled;
     try {
-        sessionStorage.setItem(EXCEPTIONS_ONLY_STORAGE_KEY, state.exceptionsOnlyView ? '1' : '0');
+        localStorage.setItem(EXCEPTIONS_ONLY_STORAGE_KEY, state.exceptionsOnlyView ? '1' : '0');
     } catch (e) {
         /* ignore */
     }
@@ -2080,15 +2103,9 @@ async function logout() {
     }
 }
 
-function hasDaszekSessionCookie() {
-    const name = 'daszek_session=';
-    return document.cookie.split(';').some(part => part.trim().startsWith(name));
-}
-
 async function tryRestoreSession() {
-    if (!hasDaszekSessionCookie()) {
-        return false;
-    }
+    // daszek_session is HttpOnly (auth.php) — document.cookie cannot see it.
+    // Always probe /me with credentials:same-origin; 401 means no session.
     try {
         const me = await apiFetch(V1_API_BASE, '/me');
         if (me && me.ok && me.user) {

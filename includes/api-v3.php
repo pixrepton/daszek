@@ -102,6 +102,13 @@ function daszek_api_register_v3_routes() {
         'methods' => 'GET',
         'callback' => 'daszek_api_v3_operational_feed_snapshot_latest',
         'permission_callback' => 'daszek_check_auth',
+        'args' => [
+            'exceptions_only' => [
+                'required' => false,
+                'default' => false,
+                'sanitize_callback' => 'rest_sanitize_boolean',
+            ],
+        ],
     ]);
 
     register_rest_route($namespace, '/operational-feed-snapshots/(?P<id>[a-zA-Z0-9_:-]+)', [
