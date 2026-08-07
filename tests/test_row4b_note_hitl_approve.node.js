@@ -8,7 +8,11 @@ const APP_JS = path.join(__dirname, '..', 'public', 'app.js');
 const SOURCE = fs.readFileSync(APP_JS, 'utf8');
 
 function extractFunction(name) {
+  // Prefer live assignment overrides (`= function (` / `= async function (`).
+  // Dead `function name(` declarations earlier in app.js must not win.
   const patterns = [
+    { marker: `${name} = async function (`, kind: 'assignment' },
+    { marker: `${name} = function (`, kind: 'assignment' },
     { marker: `${name} = async function(`, kind: 'assignment' },
     { marker: `${name} = function(`, kind: 'assignment' },
     { marker: `async function ${name}(`, kind: 'declaration' },
