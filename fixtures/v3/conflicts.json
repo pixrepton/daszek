@@ -13,6 +13,14 @@
       "summary": "Rozbieżność mocy urządzenia (fixture)"
     }
   ],
+  "superseded_facts": [
+    {
+      "fact_key": "invoice_amount",
+      "old_value": "1000,00",
+      "new_value": "1200,00",
+      "summary": "Kwota faktury zastąpiona nowszym dokumentem (fixture)"
+    }
+  ],
   "completeness_gaps": [],
   "graph_hints": [],
   "service_signals": [],

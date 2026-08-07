@@ -4970,6 +4970,41 @@ function renderMailboxConflictItems(items, emptyText = 'Brak konfliktów danych 
     `).join('')}</ul>`;
 }
 
+function renderMailboxSupersededItems(items, emptyText = 'Brak faktów zastąpionych nowszymi wartościami.') {
+    if (!items || !items.length) {
+        return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
+    }
+    return `<ul class="detail-list">${items.map(item => {
+        const key = (item || {}).fact_key || (item || {}).key || 'fact';
+        const oldVal = (item || {}).old_value
+            || (item || {}).superseded_value
+            || (item || {}).normalized_value
+            || (item || {}).raw_value
+            || (item || {}).value
+            || '';
+        const newVal = (item || {}).new_value || (item || {}).active_value || '';
+        const when = (item || {}).observed_at || (((item || {}).metadata || {}).superseded_at) || '';
+        const detailParts = [];
+        if (newVal) {
+            detailParts.push(`${oldVal} → ${newVal}`);
+        } else if (oldVal) {
+            detailParts.push(String(oldVal));
+        } else if ((item || {}).summary) {
+            detailParts.push(String((item || {}).summary));
+        }
+        if (when) {
+            detailParts.push(`@ ${when}`);
+        }
+        const detail = detailParts.join(' · ') || 'superseded';
+        return `
+        <li>
+            <strong>${escapeHtml(humanizeCode(key, 'Zastąpiony fakt'))}</strong>
+            <div>${escapeHtml(String(detail))}</div>
+        </li>
+    `;
+    }).join('')}</ul>`;
+}
+
 function renderMailboxSourceRefs(items, emptyText = 'Brak jawnych odniesień do źródeł.') {
     if (!items || !items.length) {
         return `<p class="detail-muted">${escapeHtml(emptyText)}</p>`;
@@ -4992,6 +5027,7 @@ function renderMailboxMemorySection(noteOrCase) {
     const keyFacts = (noteOrCase.key_facts && noteOrCase.key_facts.length ? noteOrCase.key_facts : snapshot.key_facts) || [];
     const latestDocuments = (noteOrCase.latest_documents && noteOrCase.latest_documents.length ? noteOrCase.latest_documents : snapshot.latest_documents) || [];
     const conflictingFacts = (noteOrCase.conflicting_facts && noteOrCase.conflicting_facts.length ? noteOrCase.conflicting_facts : snapshot.conflicting_facts) || [];
+    const supersededFacts = (noteOrCase.superseded_facts && noteOrCase.superseded_facts.length ? noteOrCase.superseded_facts : snapshot.superseded_facts) || [];
     const sourceRefs = noteOrCase.source_refs || [];
     const openQuestions = snapshot.open_questions || [];
     const customer = (snapshot && typeof snapshot.customer === 'object' && snapshot.customer) || {};
@@ -5007,7 +5043,7 @@ function renderMailboxMemorySection(noteOrCase) {
         headerBits.push(`Wskazówka kolejnego kroku (read-only z migawki, nie decyzja formalna): ${snapshot.recommended_next_action}`);
     }
 
-    const hasDetailsBody = keyFacts.length || latestDocuments.length || conflictingFacts.length || sourceRefs.length
+    const hasDetailsBody = keyFacts.length || latestDocuments.length || conflictingFacts.length || supersededFacts.length || sourceRefs.length
         || (openQuestions.length > 2);
 
     if (!headerBits.length && !snapshot.recommended_next_action_reason && !openQuestions.length && !hasDetailsBody) {
@@ -5032,6 +5068,8 @@ function renderMailboxMemorySection(noteOrCase) {
                 ${renderMailboxDocumentItems(latestDocuments)}
                 <p><strong>Konflikty danych (pamięć)</strong></p>
                 ${renderMailboxConflictItems(conflictingFacts)}
+                <p><strong>Fakty zastąpione (supersession)</strong></p>
+                ${renderMailboxSupersededItems(supersededFacts)}
                 <p><strong>Źródła pamięci</strong></p>
                 ${renderMailboxSourceRefs(sourceRefs)}
                 ${renderTechnicalDetails('Surowa migawka (JSON)', snapshot)}
