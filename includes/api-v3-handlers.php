@@ -158,6 +158,46 @@ function daszek_api_v3_system_decision_queue(WP_REST_Request $request) {
     return $result;
 }
 
+function daszek_api_v3_system_correction_ledger(WP_REST_Request $request) {
+    $case_id = trim((string) $request->get_param('case_id'));
+    $engagement_id = trim((string) $request->get_param('engagement_id'));
+    $limit = (int) $request->get_param('limit');
+    if ($limit <= 0) {
+        $limit = 50;
+    }
+    if ($limit > 200) {
+        $limit = 200;
+    }
+    $qs = http_build_query(array_filter([
+        'case_id' => $case_id,
+        'engagement_id' => $engagement_id,
+        'limit' => $limit,
+    ]));
+    $path = '/system/correction-ledger' . ($qs ? ('?' . $qs) : '');
+    $result = daszek_node_b_get_json($path);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_case_business_outcome(WP_REST_Request $request) {
+    $case_id = trim((string) $request->get_param('case_id'));
+    if ($case_id === '') {
+        return new WP_Error('invalid_case_id', 'case_id is required', ['status' => 400]);
+    }
+    $body = $request->get_json_params();
+    if (!is_array($body)) {
+        $body = [];
+    }
+    $path = '/cases/' . rawurlencode($case_id) . '/business-outcome';
+    $result = daszek_node_b_get_json($path, 'POST', $body);
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
 function daszek_api_v3_system_constitution(WP_REST_Request $request) {
     $path = '/system/constitution';
     $result = daszek_node_b_get_json($path);

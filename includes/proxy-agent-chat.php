@@ -14,7 +14,8 @@ if (!defined('ABSPATH')) exit;
  *   POST /daszek/v3/agent-chat          — sync /agent-chat
  *   POST /daszek/v3/agent-chat/stream   — streaming SSE /agent-chat/stream
  *   POST /daszek/v3/agent-chat/feedback — feedback /agent-chat/feedback
- *   GET  /daszek/v3/agent-chat/health   — circuit breaker health check
+ *   POST /daszek/v3/agent-chat/async      — async /agent-chat/async (202)
+ *   GET  /daszek/v3/agent-chat/jobs/{id}  — poll job status
  */
 
 /* ── Circuit breaker state ─────────────────────────────────────────── */
@@ -81,6 +82,18 @@ function daszek_proxy_agent_chat_register_routes() {
     register_rest_route($namespace, '/agent-chat/health', [
         'methods'             => 'GET',
         'callback'            => 'daszek_proxy_agent_chat_health',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/agent-chat/async', [
+        'methods'             => 'POST',
+        'callback'            => 'daszek_proxy_agent_chat_async',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/agent-chat/jobs/(?P<job_id>[a-zA-Z0-9_:-]+)', [
+        'methods'             => 'GET',
+        'callback'            => 'daszek_proxy_agent_chat_job',
         'permission_callback' => 'daszek_check_auth',
     ]);
 }
@@ -248,6 +261,41 @@ function daszek_proxy_agent_chat_feedback(WP_REST_Request $request) {
     }
 
     return ['ok' => true];
+}
+
+/* ── Async /agent-chat/async + poll ─────────────────────────────────── */
+
+function daszek_proxy_agent_chat_async(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    $body = $request->get_json_params();
+    if (!is_array($body) || empty($body['user_input'])) {
+        return daszek_chat_error(400, 'invalid_payload', 'Wymagane user_input.');
+    }
+    if (daszek_chat_is_circuit_open()) {
+        return daszek_chat_error(503, 'circuit_open', 'Agent chwilowo niedostepny.');
+    }
+    $result = daszek_node_b_get_json('/agent-chat/async', 'POST', $body);
+    if (is_wp_error($result)) {
+        daszek_chat_circuit_breaker_record_failure();
+        return $result;
+    }
+    daszek_chat_circuit_breaker_record_success();
+    return $result;
+}
+
+function daszek_proxy_agent_chat_job(WP_REST_Request $request) {
+    $job_id = trim((string) $request->get_param('job_id'));
+    if ($job_id === '') {
+        return daszek_chat_error(400, 'invalid_job_id', 'job_id is required');
+    }
+    $result = daszek_node_b_get_json('/agent-chat/jobs/' . rawurlencode($job_id), 'GET');
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
 }
 
 /* ── Health check ───────────────────────────────────────────────────── */

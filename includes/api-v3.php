@@ -201,6 +201,18 @@ function daszek_api_register_v3_routes() {
         'permission_callback' => 'daszek_check_auth',
     ]);
 
+    register_rest_route($namespace, '/system/correction-ledger', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_system_correction_ledger',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/cases/(?P<case_id>[a-zA-Z0-9_:-]+)/business-outcome', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v3_case_business_outcome',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
     register_rest_route($namespace, '/system/constitution', [
         'methods' => 'GET',
         'callback' => 'daszek_api_v3_system_constitution',

@@ -1335,6 +1335,32 @@ async function refreshCaseArchiveIndex() {
     }
 }
 
+async function promptBusinessOutcome(caseId) {
+    const outcome = window.prompt(
+        'Wynik biznesowy sprawy (won / lost / cancelled):',
+        'won'
+    );
+    if (!outcome) {
+        return null;
+    }
+    const normalized = String(outcome).trim().toLowerCase();
+    if (!['won', 'lost', 'cancelled', 'unknown'].includes(normalized)) {
+        showError('Niepoprawny wynik. Dozwolone: won, lost, cancelled, unknown.');
+        return null;
+    }
+    const note = window.prompt('Opcjonalna notatka (Enter = pomin):', '') || '';
+    try {
+        await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(caseId)}/business-outcome`, {
+            method: 'POST',
+            body: JSON.stringify({ outcome: normalized, note: note, source: 'daszek_ui' }),
+        });
+        return normalized;
+    } catch (error) {
+        showError(error.message);
+        return null;
+    }
+}
+
 async function archiveCaseById(caseId, meta = {}) {
     const cid = String(caseId || '').trim();
     if (!cid) {
@@ -1345,6 +1371,10 @@ async function archiveCaseById(caseId, meta = {}) {
     const summary = firstNonEmpty(meta.summary, record.summary, record.operator_brief_pl, '');
     const confirmed = window.confirm(`Przenieść sprawę „${title}” do archiwum?\n\nZniknie z listy aktywnych spraw. Możesz ją przywrócić w widoku Archiwum.`);
     if (!confirmed) {
+        return;
+    }
+    const outcomeRecorded = await promptBusinessOutcome(cid);
+    if (!outcomeRecorded) {
         return;
     }
     try {
@@ -7322,7 +7352,30 @@ function renderDecisionQueueView() {
             '</div>' +
             '</article>';
     }).join('');
-    root.innerHTML = wrapDaszekViewShell(['Kolejka decyzji'], '<section class="decision-queue-section"><div class="decision-grid">' + cards + '</div></section>');
+    root.innerHTML = wrapDaszekViewShell(['Kolejka decyzji'], '<section class="decision-queue-section"><div class="decision-grid">' + cards + '</div></section><section id="correction-ledger-section" class="detail-section" style="margin-top:24px;"><h3>Korekty (ledger)</h3><p class="detail-muted">Ładowanie…</p></section>');
+    loadCorrectionLedgerTrail();
+}
+
+async function loadCorrectionLedgerTrail() {
+    var section = document.getElementById('correction-ledger-section');
+    if (!section) return;
+    try {
+        const data = await apiFetch(V3_API_BASE, '/system/correction-ledger?limit=30');
+        const items = data && Array.isArray(data.items) ? data.items : [];
+        if (!items.length) {
+            section.innerHTML = '<h3>Korekty (ledger)</h3><p class="detail-muted">Brak zarejestrowanych korekt.</p>';
+            return;
+        }
+        const rows = items.map(function (item) {
+            return '<li><strong>' + escapeHtml(item.proposal_type || 'korekta') + '</strong> — ' +
+                escapeHtml(item.case_id || '—') + ' / ' + escapeHtml(item.response_type || 'brak odpowiedzi') +
+                (item.responded_at ? ' <span class="detail-muted">(' + escapeHtml(item.responded_at) + ')</span>' : '') +
+                '</li>';
+        }).join('');
+        section.innerHTML = '<h3>Korekty (ledger)</h3><ul class="detail-list">' + rows + '</ul>';
+    } catch (err) {
+        section.innerHTML = '<h3>Korekty (ledger)</h3><p class="error-inline">' + escapeHtml(String(err.message || err)) + '</p>';
+    }
 }
 
 /* Open a single decision in the detail panel */
