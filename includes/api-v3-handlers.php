@@ -25,6 +25,58 @@ function daszek_api_v3_case_engagement(WP_REST_Request $request) {
     ];
 }
 
+function daszek_api_v3_case_latest_offer(WP_REST_Request $request) {
+    $case_id = sanitize_text_field((string) $request->get_param('id'));
+    if ($case_id === '') {
+        return new WP_Error('invalid_payload', 'Wymagane case_id.', ['status' => 400]);
+    }
+    $result = daszek_node_b_get_json('/cases/' . rawurlencode($case_id) . '/offers/latest');
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
+function daszek_api_v3_offer_conflict_resolve(WP_REST_Request $request) {
+    $csrf_check = daszek_check_csrf($request);
+    if (is_wp_error($csrf_check)) {
+        return $csrf_check;
+    }
+    $owner_check = daszek_api_v2_require_owner();
+    if (is_wp_error($owner_check)) {
+        return $owner_check;
+    }
+    $case_id = sanitize_text_field((string) $request->get_param('id'));
+    // WordPress route matching sees encoded path segments. Decode exactly once
+    // before sanitizing, then encode exactly once for the Node B proxy call.
+    $offer_id = sanitize_text_field(rawurldecode((string) $request->get_param('offer_id')));
+    $body = $request->get_json_params();
+    if (!is_array($body)) {
+        $body = [];
+    }
+    $conflict_id = sanitize_text_field((string) ($body['conflict_id'] ?? ''));
+    $expected_revision = sanitize_text_field((string) ($body['expected_revision'] ?? ''));
+    $candidate_id = sanitize_text_field((string) ($body['candidate_id'] ?? ''));
+    if ($case_id === '' || $offer_id === '' || $conflict_id === '' || $expected_revision === '' || $candidate_id === '') {
+        return new WP_Error('invalid_payload', 'Brak tożsamości konfliktu, rewizji lub kandydata.', ['status' => 400]);
+    }
+    $node_b_body = [
+        'conflict_id' => $conflict_id,
+        'expected_revision' => $expected_revision,
+        'candidate_id' => $candidate_id,
+        'reason' => sanitize_textarea_field((string) ($body['reason'] ?? '')),
+    ];
+    $result = daszek_node_b_get_json(
+        '/cases/' . rawurlencode($case_id) . '/offers/' . rawurlencode($offer_id) . '/conflicts/resolve',
+        'POST',
+        $node_b_body
+    );
+    if (is_wp_error($result)) {
+        return $result;
+    }
+    return $result;
+}
+
 function daszek_api_v3_case_state_summary(WP_REST_Request $request) {
     $case_id = sanitize_text_field($request->get_param('id'));
     if ($case_id === '') {

@@ -165,6 +165,18 @@ function daszek_api_register_v3_routes() {
         'permission_callback' => 'daszek_check_auth',
     ]);
 
+    register_rest_route($namespace, '/cases/(?P<id>[a-zA-Z0-9_:-]+)/offers/latest', [
+        'methods' => 'GET',
+        'callback' => 'daszek_api_v3_case_latest_offer',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
+    register_rest_route($namespace, '/cases/(?P<id>[a-zA-Z0-9_:-]+)/offers/(?P<offer_id>[^/]+)/conflicts/resolve', [
+        'methods' => 'POST',
+        'callback' => 'daszek_api_v3_offer_conflict_resolve',
+        'permission_callback' => 'daszek_check_auth',
+    ]);
+
     register_rest_route($namespace, '/engagements/(?P<id>[a-zA-Z0-9_:-]+)/snapshot', [
         'methods' => 'GET',
         'callback' => 'daszek_api_v3_engagement_snapshot',

@@ -4812,7 +4812,15 @@ async function openCaseDetail(caseId) {
         } catch (_engErr) {
             engagementSummary = null;
         }
-        state.detail = { type: 'case', payload: detail, engagement: engagementSummary, source: 'v3_live' };
+        let offerTruth = null;
+        try {
+            offerTruth = await apiFetch(V3_API_BASE, `/cases/${encodeURIComponent(cid)}/offers/latest`);
+        } catch (offerError) {
+            if (Number(offerError.status || 0) !== 404) {
+                offerTruth = { ok: false, loadError: String(offerError.message || 'Nie udało się wczytać prawdy oferty.') };
+            }
+        }
+        state.detail = { type: 'case', payload: detail, engagement: engagementSummary, offerTruth, source: 'v3_live' };
         renderDetailPanel();
         void refreshCaseDetailOsEvents();
     } catch (error) {
@@ -5527,6 +5535,141 @@ function renderConflictItem(c) {
 function renderConflictsInner(items) {
     const list = Array.isArray(items) ? items : [];
     return `<ul class="detail-list">${list.map(renderConflictItem).join('')}</ul>`;
+}
+
+function offerTruthFieldLabel(field) {
+    const labels = {
+        selected_model: 'Wybrany model',
+        final_price_pln: 'Cena końcowa',
+        document_id: 'Dokument',
+        document_url: 'Adres dokumentu',
+    };
+    return labels[String(field || '')] || humanizeCode(field, 'Pole oferty');
+}
+
+function formatOfferTruthValue(field, value) {
+    if (String(field || '') === 'final_price_pln' && value !== '' && value !== null && value !== undefined) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? `${numeric.toLocaleString('pl-PL')} PLN` : `${String(value)} PLN`;
+    }
+    if (value && typeof value === 'object') {
+        return String(value.document_id || value.url || value.filename || 'Dokument');
+    }
+    return String(value ?? '—');
+}
+
+function renderOfferCandidateEvidence(candidate) {
+    const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : [];
+    if (!evidence.length) {
+        return '<p class="detail-muted">Brak jawnego dowodu źródłowego.</p>';
+    }
+    return evidence.map(item => {
+        const source = [item.producer || item.source_repo, item.source_workflow ? `workflow ${item.source_workflow}` : ''].filter(Boolean).join(' · ');
+        const path = item.source_path ? `Ścieżka: ${item.source_path}` : '';
+        const transformation = item.transformation ? `Transformacja: ${item.transformation}` : '';
+        const reference = item.evidence_reference ? `Dowód: ${item.evidence_reference}` : '';
+        const revision = item.revision ? `Rewizja: ${item.revision}` : '';
+        const observed = item.occurred_at ? `Zaobserwowano: ${formatDate(item.occurred_at)}` : '';
+        return `<li><strong>${escapeHtml(source || 'Źródło nieokreślone')}</strong><span>${escapeHtml([path, transformation, reference, revision, observed].filter(Boolean).join(' · '))}</span></li>`;
+    }).join('');
+}
+
+function renderOfferTruthSection(pack) {
+    if (!pack) {
+        return '';
+    }
+    if (pack.loadError) {
+        return `<section class="detail-section offer-truth-section"><h3>Prawda oferty</h3><p class="error-inline">${escapeHtml(pack.loadError)}</p></section>`;
+    }
+    const offer = pack.offer && typeof pack.offer === 'object' ? pack.offer : {};
+    const conflicts = Array.isArray(pack.conflicts) ? pack.conflicts : [];
+    const trust = String(pack.trust_status || 'INCOMPLETE');
+    const base = `
+        <div class="offer-truth-summary">
+            <span class="record-badge offer-trust offer-trust--${escapeHtml(trust.toLowerCase())}">${escapeHtml(trust)}</span>
+            <p><strong>Model:</strong> ${escapeHtml(formatOfferTruthValue('selected_model', offer.selected_model))}</p>
+            <p><strong>Cena:</strong> ${escapeHtml(formatOfferTruthValue('final_price_pln', offer.final_price_pln))}</p>
+            <p><strong>Status:</strong> ${escapeHtml(String(offer.status || '—'))}</p>
+        </div>`;
+    if (!conflicts.length) {
+        return `<section class="detail-section offer-truth-section"><h3>Prawda oferty</h3>${base}<p class="detail-muted">Brak sprzecznych obserwacji tej oferty.</p></section>`;
+    }
+    const cards = conflicts.map(conflict => {
+        const status = String(conflict.resolution_status || 'OPERATOR_REQUIRED');
+        const needsOperator = status === 'OPERATOR_REQUIRED';
+        const candidates = Array.isArray(conflict.candidate_evidence) ? conflict.candidate_evidence : [];
+        const explanation = String(conflict.explanation?.human_summary || 'Brak deterministycznego wyjaśnienia.');
+        const candidateCards = candidates.map(candidate => {
+            const quality = String(candidate.provenance_quality || 'MISSING');
+            const selected = String(candidate.candidate_id || '') === String(conflict.canonical_candidate_id || '');
+            return `
+                <article class="offer-candidate${selected ? ' offer-candidate--canonical' : ''}">
+                    <div class="offer-candidate-head">
+                        <strong>${escapeHtml(formatOfferTruthValue(conflict.field, candidate.value))}</strong>
+                        <span class="record-badge provenance-quality provenance-quality--${escapeHtml(quality.toLowerCase())}">${escapeHtml(quality)}</span>
+                    </div>
+                    <ul class="detail-list offer-evidence-list">${renderOfferCandidateEvidence(candidate)}</ul>
+                    ${needsOperator ? `<button type="button" class="btn btn-primary btn-small" data-offer-conflict-select="${escapeHtml(candidate.candidate_id || '')}" data-conflict-id="${escapeHtml(conflict.conflict_id || '')}" data-conflict-revision="${escapeHtml(conflict.resolution_version || '')}" data-offer-id="${escapeHtml(conflict.offer_id || offer.offer_id || '')}" data-case-id="${escapeHtml(conflict.case_id || offer.case_id || '')}">Wybierz tę wartość</button>` : ''}
+                </article>`;
+        }).join('');
+        const statusLabel = status === 'AUTO_RESOLVED'
+            ? 'Rozwiązano automatycznie'
+            : status === 'OPERATOR_RESOLVED'
+                ? 'Rozstrzygnięto przez operatora'
+                : 'Wymaga decyzji operatora';
+        return `
+            <article class="offer-conflict offer-conflict--${escapeHtml(status.toLowerCase())}" data-offer-conflict="${escapeHtml(conflict.conflict_id || '')}">
+                <header><h4>${escapeHtml(offerTruthFieldLabel(conflict.field))}</h4><span class="record-badge">${escapeHtml(statusLabel)}</span></header>
+                <p>${escapeHtml(explanation)}</p>
+                ${conflict.current_value !== undefined ? `<p class="detail-muted">Ostatnia obserwacja: ${escapeHtml(formatOfferTruthValue(conflict.field, conflict.current_value))}</p>` : ''}
+                ${conflict.canonical_value !== null && conflict.canonical_value !== undefined ? `<p><strong>Wartość kanoniczna:</strong> ${escapeHtml(formatOfferTruthValue(conflict.field, conflict.canonical_value))}</p>` : ''}
+                <div class="offer-candidates">${candidateCards}</div>
+                ${needsOperator ? '<label class="offer-resolution-reason">Uzasadnienie (opcjonalnie)<textarea rows="2" data-offer-conflict-reason placeholder="Dlaczego wybierasz tę wartość?"></textarea></label>' : ''}
+                ${Array.isArray(conflict.history) && conflict.history.length ? `<details><summary>Historia rozstrzygnięć</summary><ul class="detail-list">${conflict.history.map(item => `<li><strong>${escapeHtml(item.resolution_status || item.event_type || 'Zdarzenie')}</strong><span>${escapeHtml([item.resolved_by, item.occurred_at ? formatDate(item.occurred_at) : ''].filter(Boolean).join(' · '))}</span></li>`).join('')}</ul></details>` : ''}
+            </article>`;
+    }).join('');
+    return `<section class="detail-section offer-truth-section"><h3>Prawda oferty</h3>${base}<div class="offer-conflict-list">${cards}</div></section>`;
+}
+
+async function submitOfferConflictResolution(trigger) {
+    const caseId = String(trigger?.dataset?.caseId || '').trim();
+    const offerId = String(trigger?.dataset?.offerId || '').trim();
+    const conflictId = String(trigger?.dataset?.conflictId || '').trim();
+    const expectedRevision = String(trigger?.dataset?.conflictRevision || '').trim();
+    const candidateId = String(trigger?.dataset?.offerConflictSelect || '').trim();
+    if (!caseId || !offerId || !conflictId || !expectedRevision || !candidateId) {
+        showError('Brak pełnej tożsamości konfliktu. Odśwież sprawę.');
+        return;
+    }
+    const card = trigger.closest ? trigger.closest('[data-offer-conflict]') : null;
+    const reasonInput = card && card.querySelector ? card.querySelector('[data-offer-conflict-reason]') : null;
+    const reason = String(reasonInput?.value || '').trim();
+    trigger.disabled = true;
+    try {
+        const result = await apiFetch(
+            V3_API_BASE,
+            `/cases/${encodeURIComponent(caseId)}/offers/${encodeURIComponent(offerId)}/conflicts/resolve`,
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    conflict_id: conflictId,
+                    expected_revision: expectedRevision,
+                    candidate_id: candidateId,
+                    reason,
+                }),
+            },
+        );
+        if (state.detail && state.detail.type === 'case') {
+            state.detail.offerTruth = result;
+        }
+        showToast('Prawda oferty została rozstrzygnięta i zapisana w Case OS.');
+        renderDetailPanel();
+    } catch (error) {
+        showError(error?.message || 'Nie udało się zapisać rozstrzygnięcia.');
+        await openCaseDetail(caseId);
+    } finally {
+        trigger.disabled = false;
+    }
 }
 
 function renderGraphHintsInner(hints) {
@@ -6374,6 +6517,8 @@ function renderDetailPanel() {
 
             ${renderEngagementActionsPlaceholder(caseItem, payload)}
 
+            ${renderOfferTruthSection(state.detail.offerTruth)}
+
             ${renderOsEventsSection(state.detail.osEvents)}
 
             ${renderCaseAttachmentsSection(caseItem)}
@@ -7184,6 +7329,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const detailPanel = document.getElementById('detail-panel');
     if (detailPanel) {
         detailPanel.addEventListener('click', event => {
+            const offerResolution = event.target.closest('[data-offer-conflict-select]');
+            if (offerResolution) {
+                void submitOfferConflictResolution(offerResolution);
+                return;
+            }
             const hitlApprove = event.target.closest('[data-hitl-approve]');
             if (hitlApprove) {
                 void submitHitlAgentAction(hitlApprove, 'approve');
