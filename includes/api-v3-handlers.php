@@ -479,6 +479,13 @@ function daszek_api_v3_skrzat_ask(WP_REST_Request $request) {
     if ($token !== '') {
         $headers['Authorization'] = 'Bearer ' . $token;
     }
+    $service_token = isset($node_b['service_token']) ? trim((string) $node_b['service_token']) : '';
+    if ($service_token === '') {
+        $service_token = $token;
+    }
+    if ($service_token !== '') {
+        $headers['X-Node-B-Service-Authorization'] = 'Bearer ' . $service_token;
+    }
     $body = [
         'question' => $question,
         'mode' => $mode,

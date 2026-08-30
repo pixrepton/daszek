@@ -298,6 +298,13 @@ function daszek_node_b_get_json($path, $method = 'GET', $body = null) {
     if ($token !== '') {
         $headers['Authorization'] = 'Bearer ' . $token;
     }
+    $service_token = isset($node_b['service_token']) ? trim((string) $node_b['service_token']) : '';
+    if ($service_token === '') {
+        $service_token = $token;
+    }
+    if ($service_token !== '') {
+        $headers['X-Node-B-Service-Authorization'] = 'Bearer ' . $service_token;
+    }
     $args = [
         'timeout' => isset($node_b['timeout']) ? max(5, (int) $node_b['timeout']) : 20,
         'headers' => $headers,

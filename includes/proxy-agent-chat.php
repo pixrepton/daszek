@@ -101,14 +101,17 @@ function daszek_proxy_agent_chat_register_routes() {
 /* ── Helpers ────────────────────────────────────────────────────────── */
 
 /**
- * @return array{base_url:string,api_token:string,timeout:int}
+ * @return array{base_url:string,api_token:string,service_token:string,timeout:int}
  */
 function daszek_chat_node_b_config(): array {
     $cfg = daszek_get_config();
     $nb = isset($cfg['node_b_api']) && is_array($cfg['node_b_api']) ? $cfg['node_b_api'] : [];
+    $api_token = isset($nb['api_token']) ? trim((string) $nb['api_token']) : '';
+    $service_token = isset($nb['service_token']) ? trim((string) $nb['service_token']) : '';
     return [
         'base_url'  => isset($nb['base_url']) ? trim((string) $nb['base_url']) : '',
-        'api_token' => isset($nb['api_token']) ? trim((string) $nb['api_token']) : '',
+        'api_token' => $api_token,
+        'service_token' => $service_token !== '' ? $service_token : $api_token,
         'timeout'   => isset($nb['timeout']) ? max(30, (int) $nb['timeout']) : 150,
     ];
 }
@@ -191,6 +194,10 @@ function daszek_proxy_agent_chat_stream(WP_REST_Request $request) {
     $headers = ['Content-Type: application/json', 'Accept: text/event-stream'];
     if ($token !== '') {
         $headers[] = 'Authorization: Bearer ' . $token;
+    }
+    $service_token = $nb['service_token'];
+    if ($service_token !== '') {
+        $headers[] = 'X-Node-B-Service-Authorization: Bearer ' . $service_token;
     }
 
     $ch = curl_init();
@@ -306,9 +313,16 @@ function daszek_proxy_agent_chat_health() {
     $node_b_ok = false;
 
     if ($nb['base_url'] !== '') {
+        $headers = ['Accept' => 'application/json'];
+        if ($nb['api_token'] !== '') {
+            $headers['Authorization'] = 'Bearer ' . $nb['api_token'];
+        }
+        if ($nb['service_token'] !== '') {
+            $headers['X-Node-B-Service-Authorization'] = 'Bearer ' . $nb['service_token'];
+        }
         $probe = wp_remote_get(rtrim($nb['base_url'], '/') . '/health', [
             'timeout'   => 5,
-            'headers'   => ['Accept' => 'application/json'],
+            'headers'   => $headers,
         ]);
         $node_b_ok = !is_wp_error($probe) && wp_remote_retrieve_response_code($probe) === 200;
     }
