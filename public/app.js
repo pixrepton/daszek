@@ -1029,6 +1029,76 @@ function renderCaseReadinessSection(caseItem) {
         </section>`;
 }
 
+function caseSituationWaitingLabel(code) {
+    const key = String(code || '').trim().toLowerCase();
+    const map = {
+        company: 'firma / my',
+        company_schedule: 'firma (termin)',
+        customer: 'klient',
+        customer_signature: 'podpis klienta',
+        external: 'strona zewnętrzna',
+        operator: 'operator',
+        none: 'brak',
+    };
+    if (!key) {
+        return '';
+    }
+    if (key.includes(',')) {
+        return key.split(',').map((part) => caseSituationWaitingLabel(part.trim())).filter(Boolean).join(', ');
+    }
+    return map[key] || key;
+}
+
+function renderCaseSituationSection(caseItem) {
+    // P5: structured CCS projection only — never infer waiting/open loops from NBA title.
+    const nested = caseItem && typeof caseItem.case_situation === 'object'
+        ? caseItem.case_situation
+        : null;
+    const currentSituation = String(
+        (nested && nested.current_situation) || caseItem.current_situation || ''
+    ).trim();
+    const lifecycleStage = String(
+        (nested && nested.lifecycle_stage) || caseItem.lifecycle_stage || ''
+    ).trim();
+    const waitingOn = String(
+        (nested && nested.waiting_on) || caseItem.waiting_on || ''
+    ).trim();
+    const openLoops = Array.isArray(nested && nested.open_loops)
+        ? nested.open_loops
+        : (Array.isArray(caseItem.open_loops) ? caseItem.open_loops : []);
+    const delta = nested && typeof nested.latest_meaningful_delta === 'object'
+        ? nested.latest_meaningful_delta
+        : (typeof caseItem.latest_meaningful_delta === 'object' ? caseItem.latest_meaningful_delta : null);
+    if (!currentSituation && !lifecycleStage && !waitingOn && !openLoops.length && !delta) {
+        return '';
+    }
+    const loopRows = openLoops.slice(0, 8).map((loop) => {
+        const type = String(loop.type || loop.kind || '').trim();
+        const wait = String(loop.waiting_on || '').trim();
+        const expected = String(loop.expected_event || '').trim();
+        const status = String(loop.status || 'open').trim();
+        const bits = [
+            type || 'open_loop',
+            wait ? `waiting_on=${wait}` : '',
+            expected ? `next=${expected}` : '',
+            status ? `status=${status}` : '',
+        ].filter(Boolean);
+        return `<li>${escapeHtml(bits.join(' · '))}</li>`;
+    }).join('');
+    const deltaText = delta
+        ? String(delta.summary_pl || delta.summary || delta.case_transition || delta.type || delta.delta_id || '').trim()
+        : '';
+    return `
+        <section class="detail-section detail-section-case-situation">
+            <h3>Sytuacja sprawy (CCS)</h3>
+            ${currentSituation ? `<p class="case-situation-current"><strong>Stan:</strong> ${escapeHtml(currentSituation)}</p>` : ''}
+            ${lifecycleStage ? `<p class="detail-muted">lifecycle: ${escapeHtml(lifecycleStage)}</p>` : ''}
+            ${waitingOn ? `<p class="case-situation-waiting"><strong>Czekamy na:</strong> ${escapeHtml(caseSituationWaitingLabel(waitingOn))} <span class="detail-muted">(${escapeHtml(waitingOn)})</span></p>` : ''}
+            ${loopRows ? `<ul class="case-situation-open-loops">${loopRows}</ul>` : ''}
+            ${deltaText ? `<p class="detail-muted">ostatnia zmiana: ${escapeHtml(deltaText)}</p>` : ''}
+        </section>`;
+}
+
 function renderCaseUnderstandingStatusSection(caseItem) {
     // SLICE-2C: display only. `case_understanding_status` says how good our reasoning about the
     // case is; it must never decide whether the card is on the desk (feed_visibility owns that).
@@ -6530,6 +6600,8 @@ function renderDetailPanel() {
             ${renderUnderstandingQualitySection(caseItem)}
 
             ${renderCaseUnderstandingStatusSection(caseItem)}
+
+            ${renderCaseSituationSection(caseItem)}
 
             ${renderReadinessFacetsSection(caseItem)}
 
