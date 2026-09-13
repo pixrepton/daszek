@@ -1099,6 +1099,45 @@ function renderCaseSituationSection(caseItem) {
         </section>`;
 }
 
+function renderCaseAuthoritySection(caseItem) {
+    // P5: hard HITL comes from Authority / hard_hitl_required, never from NBA title.
+    const nested = caseItem && typeof caseItem.case_authority === 'object'
+        ? caseItem.case_authority
+        : null;
+    const decision = String(
+        (nested && nested.authority_decision) || caseItem.authority_decision || ''
+    ).trim();
+    const hard = Boolean(
+        (nested && nested.hard_hitl_required)
+        || caseItem.hard_hitl_required
+        || (decision === 'REQUIRE_HUMAN')
+    );
+    const label = String(
+        (nested && nested.operator_label_pl) || caseItem.authority_label_pl || ''
+    ).trim();
+    const nba = caseItem && typeof caseItem.case_nba === 'object' ? caseItem.case_nba : null;
+    const reviewKind = String(
+        (nba && nba.review_kind) || caseItem.nba_review_kind || ''
+    ).trim();
+    if (!decision && !label && !hard) {
+        return '';
+    }
+    const tone = hard ? 'authority-require-human' : 'authority-allow-autonomous';
+    const shown = label || (hard
+        ? 'Wymaga zatwierdzenia / działania człowieka'
+        : (decision === 'ALLOW_AUTONOMOUS' ? 'Może wykonać automatycznie' : decision));
+    const softNote = (!hard && reviewKind === 'soft')
+        ? '<p class="detail-muted">NBA ma miękki sygnał przeglądu — to nie jest twarde HITL.</p>'
+        : '';
+    return `
+        <section class="detail-section detail-section-case-authority">
+            <h3>Uprawnienie (Authority)</h3>
+            <p class="case-authority-label ${tone}">${escapeHtml(shown)}</p>
+            ${decision ? `<p class="detail-muted">authority_decision=${escapeHtml(decision)}</p>` : ''}
+            ${softNote}
+        </section>`;
+}
+
 function renderCaseUnderstandingStatusSection(caseItem) {
     // SLICE-2C: display only. `case_understanding_status` says how good our reasoning about the
     // case is; it must never decide whether the card is on the desk (feed_visibility owns that).
@@ -6602,6 +6641,8 @@ function renderDetailPanel() {
             ${renderCaseUnderstandingStatusSection(caseItem)}
 
             ${renderCaseSituationSection(caseItem)}
+
+            ${renderCaseAuthoritySection(caseItem)}
 
             ${renderReadinessFacetsSection(caseItem)}
 
