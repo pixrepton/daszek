@@ -2681,13 +2681,13 @@ function updateSidebarSummary() {
         const feed = getOperationalFeed();
         visible = (feed.desk || []).length;
         const sections = ((feed.day || {}).sections || []);
-        nowCount = sections.find(section => section.key === 'teraz')?.items?.length || 0;
+        nowCount = canonicalDayNowCount(sections);
         if (!nowCount && (!sections.length || !sections.some(s => (s.items || []).length))) {
             nowCount = Math.min(3, (feed.cases || []).length);
         }
     } else {
         visible = (state.data.desk.items || []).length;
-        nowCount = (state.data.day.sections || []).find(section => section.key === 'teraz')?.items.length || 0;
+        nowCount = canonicalDayNowCount(state.data.day.sections || []);
     }
     const mc = state.data.mailboxCases || {};
     if (mc.ok && Array.isArray(mc.cases)) {
@@ -2813,6 +2813,22 @@ function getFeedActionItems(feed) {
         return f.action_items;
     }
     return Array.isArray(f.tasks) ? f.tasks : [];
+}
+
+function canonicalDayNowCount(sections) {
+    const keys = new Set([
+        'teraz',
+        'wymaga_czlowieka',
+        'obowiazek_firmy',
+        'brak_danych',
+        'oczekiwanie',
+    ]);
+    return (sections || []).reduce((n, section) => {
+        if (!keys.has(String(section.key || ''))) {
+            return n;
+        }
+        return n + ((section.items || []).length);
+    }, 0);
 }
 
 function buildFeedDaySections(feed) {
